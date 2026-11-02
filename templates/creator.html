@@ -11,7 +11,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components/cards.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components/badges.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components/detail.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/components/download.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/components/download.css', v='rc5') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components/gallery.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components/fullscreen.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components/creator.css') }}">
@@ -455,9 +455,10 @@
     <script src="{{ url_for('static', filename='js/scanner.js') }}"></script>
     <script src="{{ url_for('static', filename='js/search_sources.js') }}"></script>
     <script src="{{ url_for('static', filename='js/discovery.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/filters.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/navbar.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/modal.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/filters.js', v='v2-onboarding') }}"></script>
+    <script src="{{ url_for('static', filename='js/navbar.js', v='rc9') }}"></script>
+    <script src="{{ url_for('static', filename='js/install_destination.js', v='rc5') }}"></script>
+    <script src="{{ url_for('static', filename='js/modal.js', v='rc5') }}"></script>
     <script src="{{ url_for('static', filename='js/gallery.js') }}"></script>
     <script src="{{ url_for('static', filename='js/fullscreen.js') }}"></script>
     <script src="{{ url_for('static', filename='js/settings.js') }}"></script>
@@ -533,5 +534,7 @@
     </dialog>
 
     <script src="{{ url_for('static', filename='js/creator.js') }}"></script>
+{% include "components/help_setup.html" %}
+<script src="{{ url_for('static',filename='js/help_setup.js',v='rc5') }}"></script>
 </body>
 </html>

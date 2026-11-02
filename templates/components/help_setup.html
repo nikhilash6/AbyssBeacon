@@ -1,0 +1,29 @@
+<style>
+html:has(dialog[open]),body:has(dialog[open]){overflow:hidden!important}
+.abyss-help{overscroll-behavior:contain}
+.abyss-help{background:#0b171c;color:#d6e5e9;border:1px solid #32616d;border-radius:18px;width:min(700px,92vw);max-height:85vh;overflow:auto;padding:24px;font:16px/1.5 Arial,sans-serif}.abyss-help::backdrop{background:#000a}.abyss-help h2{margin:0 0 14px}.abyss-help p{margin:10px 0}.abyss-help button,.abyss-help a{display:inline-block;color:#6fe6f2;background:#08191e;border:1px solid #286370;border-radius:12px;padding:8px 12px;margin:5px 5px 5px 0;cursor:pointer;text-decoration:none;font:inherit}.abyss-help section{border-top:1px solid #26434c;padding:16px 0}.abyss-help [hidden]{display:none}.abyss-help-close{float:right}
+</style>
+<dialog id="abyssHelp" class="abyss-help" aria-labelledby="abyssHelpTitle">
+<button type="button" class="abyss-help-close" data-help-close aria-label="Close help">×</button>
+<h2 id="abyssHelpTitle">Help &amp; getting started</h2>
+<div data-help-page="home">
+<p>Choose a guide or get help with AbyssBeacon.</p>
+<button type="button" data-help-guide="setup">First-time setup</button><button type="button" data-help-guide="library">Downloaded library guide</button>
+<section><h3>Questions or errors?</h3><p>Ask a question on Discord or by email. If you encounter an error, report it on GitHub so we can track the fix. Include your AbyssBeacon version, the source or model involved, what happened, and any relevant error message.</p><a href="https://github.com/Tomat0223/AbyssBeacon/issues" target="_blank" rel="noopener">Report an issue on GitHub</a> <a href="https://discord.gg/Mu7FTTBE49" target="_blank" rel="noopener">Join Discord</a> <a href="mailto:abyssbeacon01@gmail.com">Email AbyssBeacon</a></section>
+<section><h3>Support AbyssBeacon</h3><p>If AbyssBeacon has been useful, you can support its development.</p><a href="https://cash.app/$AbyssBeacon" target="_blank" rel="noopener">Donate</a></section>
+</div>
+<div data-help-page="setup" hidden>
+<p>Set up the parts you want to use. You can reopen this guide from Help at any time.</p>
+<section><h3>1 · Connect your sources</h3><p>CivitAI offers limited discovery before connecting. Connect CivitAI Red and SeaArt to include them in scans. Check Source Accounts for connection status and available authentication options.</p><button data-help-setting="accounts">Open Source Accounts</button></section>
+<section><h3>2 · Choose how to download</h3><p><strong>Local Installer (recommended)</strong> saves each model to your ComfyUI folder or a custom model folder and links it to your Downloaded library automatically. You can track progress, open the saved folder, and start reviewing and tagging as soon as the download finishes.</p><button data-help-setting="downloads">Set up Local Installer</button><p><strong>Browser downloads</strong> save through your browser. To track one in your library, choose Library maintenance → Add existing model files.</p></section>
+<section><h3>3 · Review automatic retention</h3><p>Choose how long discovered model cards stay in your feed. Review the normal-scan and creator/discovery windows and the protected-model rules before enabling cleanup.</p><button data-help-setting="retention">Review retention</button></section>
+<section><h3>4 · Make it yours</h3><p>Adjust appearance and source colors in Library settings.</p><button data-help-setting="appearance">Open appearance</button></section>
+<button type="button" data-help-close>Done for now</button>
+</div>
+<div data-help-page="library" hidden>
+<section><h3>Your models, one file at a time</h3><p>Completed Local Installer downloads and files you link appear here. Use Library maintenance → Add existing model files for models saved by your browser or downloaded elsewhere.</p></section>
+<section><h3>Find and organize</h3><p>Search model names, filenames, creators, creator tags, and personal tags. Filter by source, architecture, type, review state, or favorites. Use the review dropdown to mark a file and select its tags to edit them.</p></section>
+<section><h3>Manage files</h3><p>Open folder takes you to the saved location. File details shows the full path and recorded dates. Delete local file removes the selected file after confirmation. Past downloads retains history for files no longer tracked as installed.</p><p>Moved files? Use Update model locations. Find duplicate files compares full SHA-256 hashes to identify identical file contents, even when filenames differ.</p></section>
+<button type="button" data-help-close>Got it</button>
+</div>
+</dialog>

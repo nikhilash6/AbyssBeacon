@@ -66,7 +66,9 @@ def evidence(model):
         role = str(file.get('role') or file.get('file_type') or '').lower().replace('_', ' ').replace('-', ' ')
         if SUPPORT_PATH.search(path) or any(word in role for word in SUPPORT_ROLES):
             continue
-        if PurePosixPath(path).suffix.lower() not in WEIGHT_EXTENSIONS and file.get('primary') is not True:
+        # "primary" also means a downloadable ZIP/JSON/config on some sources.
+        # It is visibility metadata, not evidence that this artifact is a weight.
+        if PurePosixPath(path).suffix.lower() not in WEIGHT_EXTENSIONS:
             continue
         digest = sha256(file)
         if not digest:

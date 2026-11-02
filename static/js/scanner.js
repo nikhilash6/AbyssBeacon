@@ -15,6 +15,7 @@ function initializeScanner(){
         scanOverlay?.classList.add("open");
         scanOverlay?.setAttribute("aria-hidden","false");
         syncScanSummaries();
+        window.modelRadarPreviewPreScanSeen?.();
 
     });
     document.getElementById("closeScanConfig")?.addEventListener("click", closeScanConfig);
@@ -180,6 +181,7 @@ function startScan(configuredSources=null, configuredArchitectures=null){
     architectures.forEach(architecture => formData.append("architectures", architecture));
     document.querySelectorAll('input[name="scanModelType"]:checked').forEach(input=>formData.append("model_types",input.value));
     formData.append("model_types_explicit","1");
+    formData.append("clear_seen_before_scan",document.getElementById("clearSeenBeforeScan")?.checked ? "1" : "0");
 
 
     scanRunning = true;

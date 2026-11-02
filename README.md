@@ -1,287 +1,216 @@
 # AbyssBeacon
 
-**Search deeper. Find models sooner.**
+**Discover. Identify. Organize.**
 
-A local model discovery and download manager for Hugging Face, CivitAI, CivitAI Red, ModelScope, TensorHub Art, and SeaArt.
+**A free, open-source model discovery, download, and local-library manager for Windows and ComfyUI.**
 
-AbyssBeacon brings multiple model sources into one local interface so you can find new releases, track updates, inspect previews and metadata, follow creators, and manage downloads without checking each site individually.
+Find new checkpoints, LoRAs, workflows, and other AI resources across multiple sites. Download what you need, identify files you already have, and keep models, previews, trigger words, and storage locations organized—all from a local application.
 
-<img width="2353" height="1235" alt="main feed" src="https://github.com/user-attachments/assets/36df0552-cdea-4e99-823a-6c942b427f75" />
+[**Latest release**](https://github.com/Tomat0223/AbyssBeacon/releases/latest) · [**Report an issue**](https://github.com/Tomat0223/AbyssBeacon/issues) · [**Discord**](https://discord.gg/Mu7FTTBE49) · [**Email**](mailto:abyssbeacon01@gmail.com)
 
-**[Download the latest release](https://github.com/Tomat0223/AbyssBeacon/releases/latest)** · **[Join the Discord](https://discord.gg/gdNWuwEBEB)** · **[Report a bug](https://github.com/Tomat0223/AbyssBeacon/issues)**
+![AbyssBeacon discovery feed showing model cards, architecture badges, search and filters](docs/screenshots/discovery-feed.png)
 
-## Features
+*Browse discovered models, previews, creators, and model types in one feed. Model artwork and listings come from their respective sources.*
 
-- Scan multiple supported model sources from one interface.
-- Track new, updated, viewed, favorite, and downloaded models.
-- Filter by source, architecture, model type, access state, favorites, and download status.
-- Combine several architectures in one feed filter.
-- Choose sources, architectures and model types using compact collapsible scan controls.
-- View Hugging Face and ModelScope collection READMEs without leaving AbyssBeacon.
-- Switch source/version details and inspect clearly scoped popularity statistics.
-- Browse model images and video previews.
-- Search supported sources directly without changing the normal scan registry.
-- Import a model or scan a creator by pasting a supported page URL.
-- Use Discovery scans and creator tools to find models outside normal architecture searches.
-- Track downloadable, gated, paid, and early-access states where the source provides enough information.
-- Download through the browser or use the Local Installer for a ComfyUI model library.
-- Pause and resume supported local downloads, including across AbyssBeacon restarts.
-- Keep model information and preview images beside locally installed models.
-- Configure scan limits and retention windows to control how deeply sources are searched.
-- Hide mature content by default, with user-controlled visibility settings.
-- Block creators from individual sources or use supported universal creator exclusions.
-- Run locally with a SQLite database and local settings.
+## Why AbyssBeacon?
 
-<img width="1593" height="1136" alt="card_details" src="https://github.com/user-attachments/assets/7d3d7656-3372-45a0-8345-7c23d1ca2df5" />
+Finding a model is often the easy part. Remembering **which file you downloaded, what version it was, what trigger words it needs, where you put it, or whether you already have it** can be much harder.
 
-## Supported Sources
+AbyssBeacon brings three jobs together:
 
-| Source | Normal Scan | Search / Discovery | Downloads |
-| --- | --- | --- | --- |
-| Hugging Face | Yes | Yes | Yes |
-| CivitAI | Yes | Yes | Yes |
-| CivitAI Red | Yes | Yes | Yes |
-| ModelScope | Yes | Yes | Yes |
-| TensorHub Art | Yes | Yes | Yes |
-| SeaArt | Yes | Yes | Source-dependent |
+| Discover | Identify | Organize |
+| --- | --- | --- |
+| Scan several model sites from one interface | Examine models, versions, files, and previews | Search and tag your Downloaded Library |
+| Find new models, updates, creators, and collections | Match existing files by SHA-256 through CivArchive | Keep review states, favorites, and installed versions |
+| Search beyond your normal scan targets | Preserve original filenames and source details | Locate moved models and manage duplicates |
 
-Source websites, APIs, authentication requirements, and page structures can change without notice. A source may temporarily require an AbyssBeacon update if its service changes.
+AbyssBeacon **does not generate images or replace ComfyUI**. It's a companion for finding, downloading, understanding, and keeping track of the resources you use.
 
-## Supported Architectures
+## Discover across six model sources
 
-The built-in scan options currently include:
+| Source | Source | Source |
+| --- | --- | --- |
+| [CivitAI](https://civitai.com/) | [CivitAI Red](https://civitai.red/) | [Hugging Face](https://huggingface.co/) |
+| [ModelScope](https://modelscope.cn/) | [TensorHub Art](https://tensorhub.art/) | [SeaArt](https://www.seaart.ai/) |
 
-| Family | Scan options |
-| --- | --- |
-| MOSS | MOSS Image (SFT), MOSS Image Base |
-| Qwen | Qwen Image 2.1 |
-| Fibo | Fibo 2.0 Dev, Fibo 2.0 Edit Turbo |
-| Krea | Krea 2 |
-| MiniMax | MiniMax-H3 |
-| FLUX.3 | FLUX.3, FLUX.3 Klein, FLUX.3 Klein Base |
-| FLUX.2 | FLUX.2 Klein 4B, FLUX.2 Klein 9B |
-| WAN | WAN 2.2 |
-| Z-Image | Z-Image Turbo, Z-Image Base |
-| LTX | LTX-2.5 |
-| Other families | Anima, Illustrious, Pony, SDXL |
+A unified feed lets you browse supported sources without repeatedly opening each website. Where the identities of mirrored listings can be verified, AbyssBeacon can group their sources and versions instead of showing separate copies.
 
-Availability varies by source; an architecture being listed does not mean every site has matching models or a supported scan category.
+- **New and updated model tracking**, including architecture-aware New counts and clear controls.
+- Filters for **multiple architectures**, model type, source, availability, favorites, and downloaded models.
+- Search within the feed; sort and review models using the information sources provide.
+- **Search Sources** for custom keywords and model names outside your normal architecture scans; find models, creators, or import by URL.
+- **Discovery Scan** to explore categories and tags beyond the normal watch list.
+- Open creators, collections, model descriptions, source READMEs, previews, and version galleries; return to your browsing position.
+- View and favorite collections, and follow individual collection items where supported.
 
-- **MOSS Image** is the SFT variant. SeaArt supports this option; **MOSS Image Base** is scanned separately on supported sources and is not enabled on SeaArt.
-- **Fibo 2.0 Dev** and **Fibo 2.0 Edit Turbo** discovery is currently enabled for **Hugging Face and ModelScope**.
-- **Krea 2** scans include regular and Turbo categories on **CivitAI and CivitAI Red**.
+Supported scan families include **Anima, Illustrious, Krea 2, MiniMax-H3, MOSS Image, Qwen Image 2.1, Fibo 2.0, FLUX, LTX, SDXL, Pony, WAN 2.2, and Z-Image**, including supported variants. Coverage differs by source, and new families may be added over time.
 
-You can select several architectures in one scan or combine them in the feed filter. Screenshots illustrate the interface and may show fewer options than the current version.
+<details>
+<summary><strong>See scan configuration, model variants, and advanced search</strong></summary>
 
-## Getting Started
+Normal scans let you choose the sources, model families, and model types you want to include:
+
+![Normal scan configuration with source and architecture selections](docs/screenshots/scan-configuration.png)
+
+Model families with variants have their own selector, while the main settings page remains compact:
+
+![FLUX variant selector](docs/screenshots/model-variants.png)
+
+Search supported providers directly for keywords and other catalog entries outside the normal scan:
+
+![Search Sources with architecture, source and depth options](docs/screenshots/search-sources.png)
+
+</details>
+
+## Download with control
+
+Choose **browser downloads** or **AbyssBeacon's managed downloader**, which can save files into your ComfyUI model directories or a custom destination.
+
+- Inspect versions and available files before downloading: **original filenames, sizes, formats, repository paths, and quantization details** when provided.
+- Distinguish primary downloads from optional or supporting files when source metadata allows.
+- Choose the model classification and save location where supported; avoid automatic file renaming or overwriting.
+- Use the **Download Manager** to track queued and active downloads, with progress and estimated time when available.
+- Record successful managed downloads in your Downloaded Library, including their installed version and location.
+- Optionally save a **preview image and model-information text file** next to the downloaded model.
+
+![Model download details showing the original SafeTensors filename, version and installed file information](docs/screenshots/model-download-details.png)
+
+### Model information stays with the file
+
+This is one of the main reasons AbyssBeacon exists. Instead of renaming a LoRA to include its trigger word or manually creating a separate note, you can choose to save reference information alongside the actual model.
+
+![Saved preview image, original SafeTensors file and generated AbyssBeacon Info text document](docs/screenshots/model-preview-and-notes.png)
+
+*Example of the model's original file, a saved preview, and generated notes containing its source page, creator, version, description, trigger word and usage information. The available content depends on what the original source supplies.*
+
+### Understand access before downloading
+
+Model sources don't all allow the same kind of download. AbyssBeacon distinguishes **downloadable files, sign-in requirements, uncertain access, paid access, and other restrictions** where source information is available. In particular, CivitAI version-level access checks can help indicate whether a download is expected to work without a connected account. Authentication hints are adjusted when the corresponding account is connected inside AbyssBeacon.
+
+If an attempted model download returns a sign-in webpage or invalid file instead of actual model data, AbyssBeacon rejects it rather than marking the webpage as a successfully installed model. **A download indicator is not a guarantee that a third-party server will grant access.**
+
+### Firefox Download Companion (optional)
+
+Some sites require an authorized browser session or verification before allowing a download. AbyssBeacon includes an optional **Firefox Download Companion**, currently documented for **CivitAI Red** browser handoffs.
+
+When a download needs this browser flow, the companion can pass the selected temporary download URL back to your **local AbyssBeacon Download Manager**. AbyssBeacon can then handle the file destination and library tracking rather than leaving it as an unrelated browser download.
+
+The companion **does not bypass logins, purchases, or access restrictions**. It uses your authorized browser session and communicates with the local application; ordinary downloads started directly on a website remain ordinary browser downloads.
+
+See [**Firefox companion installation, requirements, and limitations**](browser_companion/README.md). The bundled companion is for desktop Firefox, not Chrome or Edge.
+
+## The Downloaded Library
+
+Give the models on your computer their own searchable, organized library rather than relying only on folders and filenames.
+
+- Search by **model, filename, creator, or your personal tags**.
+- Mark models **Not tried, Keep,** or another available review state, independently of favorites.
+- Add your own tags—*dragon, fantasy, Halloween, spaceship,* or whatever helps you find a file again.
+- See installed versions, original filenames, source records, and recorded storage locations.
+- Open containing folders directly; keep downloaded files and their identities connected.
+- Review previously downloaded or deleted records through the optional download-history setting.
+
+![Downloaded Library with personal tags, review states and installed-file details](docs/screenshots/downloaded-library.png)
+
+*Original filenames remain intact while tags and review states make the collection easy to search.*
+
+## Already have hundreds of models? Import them.
+
+You don't have to download through AbyssBeacon to use the library. Its **Add existing model files** tool can identify local files using SHA-256 fingerprints and [CivArchive](https://civarchive.com/) matches.
+
+**You choose which folders to scan, which individual files to identify, and which results to add.** Scanning a folder does not automatically import everything it contains.
+
+1. **Choose folders and scan.** AbyssBeacon inventories local model files without adding or moving them.
+2. **Select the files you want checked.** Use individual checkboxes or **Select visible** (up to 50), then choose **Find matches for selected files**. SHA-256 fingerprints of those selected files are checked through CivArchive; the model files themselves stay on your PC.
+3. **Review and confirm.** Inspect verified matches and optional destination and companion-file choices before adding them to your Downloaded Library. Files remain in place unless you explicitly choose to move them.
+
+![Verified local model file match through CivArchive, with import options and confirmation step](docs/screenshots/import-verified-match.png)
+
+*The match is reviewed before it becomes a library entry.*
+
+**If CivArchive finds no verified match**, you can still choose **Link by model URL**, **Link to an existing library entry**, or **Add manually**. These alternatives are useful, but they are not the same as a cryptographically verified match. Identification and available metadata depend on the sources.
+
+<details>
+<summary><strong>See the file-selection step before SHA-256 identification</strong></summary>
+
+![User-selected local files prior to SHA-256 matching](docs/screenshots/import-select-files.png)
+
+</details>
+
+## Keep your local library healthy
+
+AbyssBeacon includes tools for correcting file locations and identifying wasted storage:
+
+- **Update model locations:** search chosen folders for files moved since they were linked to the library, with checks before changing recorded paths.
+- **Find duplicate files:** compare actual file contents using full SHA-256, not just filenames or sizes.
+- **Manage duplicate copies:** review matching paths and physical copies, then use **Open folder** or **Delete copy** beside each file.
+- **Safer deletion:** confirm the exact path, verify another independent physical copy survives, and send the chosen SafeTensors copy to the Windows Recycle Bin rather than permanently deleting it. Hard links are distinguished from separate physical copies when estimating recoverable space.
+
+![Duplicate-file results with verified matching files, useful shortened paths, Open folder and Delete copy actions](docs/screenshots/duplicate-file-manager.png)
+
+*Choose exactly which duplicate to keep. Results update after deletion, and you can run a fresh scan to verify the remaining files.*
+
+<details>
+<summary><strong>See the moved-file location repair tool</strong></summary>
+
+![Update model locations scan settings and folder selection](docs/screenshots/update-model-locations.png)
+
+</details>
+
+## Image previews, prompts, and workflow metadata
+
+Open supported example images and inspect any embedded generation information they provide. Depending on the image and its metadata, AbyssBeacon can display **model references, seed, steps, CFG, sampler, scheduler, dimensions, prompts, and ComfyUI workflow data**. Copy prompts or export compatible workflow JSON where available.
+
+![Image viewer showing generation settings and an example image](docs/screenshots/image-generation-metadata.png)
+
+*Generation metadata varies by image. Some images have full ComfyUI workflows; others include partial information or none.*
+
+## Getting started
 
 ### Requirements
 
-- Windows
-- Python 3 available from the command line
-- Internet access
-- Firefox, Chrome, or Microsoft Edge if you use the SeaArt browser-session connection
+- **Windows**, the primary tested platform.
+- **Python 3** available on your system path; the included launcher creates a local virtual environment and installs the required Python packages.
+- Internet access for the model sources you choose.
+- **ComfyUI is optional** for discovery and library organization, but useful as a download destination.
 
-Windows is the tested platform for the initial release.
+### Fresh installation
 
-### Start AbyssBeacon
+1. Open the [**latest GitHub release**](https://github.com/Tomat0223/AbyssBeacon/releases/latest) and download its **full application/source ZIP**.
+2. Extract it to its own folder.
+3. Run **`AbyssBeacon.bat`**. On first launch, it creates the virtual environment and installs missing dependencies.
+4. Open **`http://127.0.0.1:5000`** if your browser does not open automatically.
+5. Follow the first-time guide to connect any needed source accounts, select downloads and storage preferences, and choose your scan targets.
 
-1. Download or clone the repository.
-2. Open the `AbyssBeacon` folder.
-3. Double-click `AbyssBeacon.bat`.
-4. On first launch, AbyssBeacon creates a local Python virtual environment and installs the packages listed in `requirements.txt`.
-5. Open `http://127.0.0.1:5000` in your browser when the terminal says AbyssBeacon is ready.
+### Updating an existing installation
 
-The first startup can take longer while Python packages are installed.
+Use the matching **upgrade ZIP** for your installed version when the release provides one. **Close AbyssBeacon and back up its folder, database, and settings** before replacing program files. Consult that release's upgrade instructions; do not replace your personal database or configuration with files from a fresh-install package.
 
-## First Run
+### First things to try
 
-Fresh installations start with conservative defaults:
+- Select a few sources and architectures and run a normal scan.
+- Open a model to explore versions, download choices, descriptions, and previews.
+- Set a managed-download destination and optionally enable companion information files.
+- Visit **Downloaded Library → Library maintenance → Add existing model files** to identify a model already on your computer.
 
-- All supported sources and tested model families are available.
-- CivitAI is preselected for the first scan. Other sources are available but remain unchecked until you enable them. All tested model families are preselected.
-- Normal scans use a global maximum of 150 results per source and architecture search.
-- Automatic Retention is off by default.
-- Mature models are hidden by default.
-- Downloads use the browser by default.
-- The Local Installer has no ComfyUI folder configured until you choose one.
+## Local-first design, privacy, and limitations
 
-Open Settings to change these defaults before your first large scan.
+AbyssBeacon is a **local Python/Flask application with a SQLite database**. It does not require an AbyssBeacon cloud account. Your library records and settings live on your computer. Scanning, checking source metadata, matching selected file fingerprints, or downloading necessarily contacts the relevant external service.
 
-## Scanning
+Some integrations require third-party sign-in, browser verification, or have limits imposed by their providers. Availability, download permissions, source classifications, mature-content labels, and API behavior can change. Mature content is hidden by default on new installations, but third-party classification is not infallible.
 
-Use the `SCAN` button to choose the sources and model families for a normal scan.
+**Do not share your local database, account tokens, cookies, browser profiles, `secrets.json`, or personal configuration files** in public issues or release archives.
 
-<img width="1072" height="1184" alt="scan_details" src="https://github.com/user-attachments/assets/acfae5da-0ffa-4f0b-bf55-3b5cbef4250c" />
+## Help and community
 
-AbyssBeacon supports centralized scan limits:
+- [**GitHub Issues**](https://github.com/Tomat0223/AbyssBeacon/issues) — bug reports and reproducible problems.
+- [**Discord**](https://discord.gg/Mu7FTTBE49) — questions, feedback, and discussion.
+- [**Email AbyssBeacon**](mailto:abyssbeacon01@gmail.com) — support and questions.
 
-- A finite result limit stops a source and architecture search at that result ceiling.
-- If Automatic Retention is enabled, the scan stops at the result limit or retention-day boundary, whichever comes first.
-- Unlimited result mode uses the retention window as the stopping boundary.
-- Individual sources can use lower limits than the global setting.
+When reporting a bug, include the source, a model or creator link where relevant, the expected and actual results, and any safe error text—but **never include credentials**.
 
-Individual services can still impose their own backend or pagination limits.
+If you'd like to support development, [voluntary tips](https://cash.app/$AbyssBeacon) are appreciated but never required.
 
-## Search Sources and Discovery
+## License and credits
 
-Normal scans use the tested model-family definitions configured in AbyssBeacon.
-
-The main search box filters models already in your AbyssBeacon feed.
-
-Use Search Sources when you want to look for an arbitrary model name or keyword without adding it to the normal scan registry. Type `search` in the main search box to open Search Sources.
-
-Choose **Import / scan by URL** in Search Sources to paste a supported model or creator page. AbyssBeacon detects the source and uses its normal lookup and account connection. Direct model links are imported independently of the architecture selection; creator imports use the selected result limit and source limits. Some sources require a connected account.
-
-See [Supported Architectures](#supported-architectures) for the built-in scan options and source-specific notes.
-
-Discovery tools can use source-specific tags and creator information to find models outside the normal architecture searches. Type `discover` in the main search box to open Discovery.
-
-MiniMax-H3 discovery on Hugging Face combines name, tag, and base-model searches. Broad search hits are checked against architecture evidence before import, so unrelated MiniMax models are not assumed to be H3.
-
-Fresh installations use Hugging Face's combined creation/update activity ordering. Existing saved source-sort preferences remain unchanged when updating.
-
-Models remain **New** when you open them or visit a collection. Use **Mark Visible as Seen** to clear the New status of models currently on screen, or **Mark All as Seen** to clear all New models in the library. Returning from a creator or collection restores your feed filters and location.
-
-Additional explanations are available by hovering over controls inside AbyssBeacon.
-
-## Downloads and ComfyUI
-
-The default download behavior sends files to your browser.
-
-To use the Local Installer:
-
-1. Open Settings.
-2. Go to Library.
-3. Set your ComfyUI folder.
-4. Choose `Install to local library` as the download behavior.
-
-The default Local Installer layout is:
-
-`AbyssBeacon / model`
-
-AbyssBeacon keeps original filenames by default and keeps both files if an older version already exists.
-
-When enabled, model info and preview images are saved beside installed models.
-
-## SeaArt
-
-SeaArt discovery uses a local browser session because its website signs requests in the frontend.
-
-AbyssBeacon can launch an isolated local browser profile for this connection. Firefox is the default browser choice. The saved browser profile stays on your machine and is excluded from the repository by `.gitignore`.
-
-## Privacy and Local Data
-
-AbyssBeacon is designed as a local application.
-
-Local runtime data can include:
-
-- `models.db`
-- `settings.json`
-- `secrets.json`
-- browser-session profiles
-- cached previews
-- download state
-
-The public repository excludes credentials, browser profiles, databases, caches, partial downloads, and other machine-specific runtime data.
-
-If you add source credentials, they remain local unless you deliberately copy or publish those files yourself.
-
-## Mature Content
-
-Fresh installations default to `Hide Mature`.
-
-Users can change mature-content visibility in Settings. Source metadata is not always consistent, so no automated classification should be treated as perfect.
-
-## Current Scope
-
-AbyssBeacon is focused on discovering, tracking, inspecting, and downloading models from the currently supported sources.
-
-The first public release is Windows-focused and has been built primarily around local ComfyUI workflows. Source integrations may need maintenance as third-party websites and APIs change.
-
-## Reporting Problems
-
-Join the [AbyssBeacon Discord](https://discord.gg/gdNWuwEBEB) for discussion, feedback, and feature ideas. For bugs, please [open a GitHub Issue](https://github.com/Tomat0223/AbyssBeacon/issues) so reports and fixes stay easy to track.
-
-If something breaks, an issue is most useful when it includes:
-
-- the source being scanned
-- the model or creator involved, when relevant
-- what you expected to happen
-- what happened instead
-- terminal output around the failure
-- a screenshot when the problem is visual
-
-Do not post API keys, cookies, session tokens, passwords, or your `secrets.json` file in a public issue.
-
-## Project Status
-
-AbyssBeacon is actively developed. This is the first public release, so issues may still appear, especially in integrations that depend on third-party websites and APIs.
-
-## Support AbyssBeacon
-
-AbyssBeacon is a free, open-source project that I work on in my spare time. If it has been useful to you and you'd like to support continued development, anything helps and is greatly appreciated.
-
-<p align="center">
-  <a href="https://cash.app/$AbyssBeacon">
-    <img src="static/images/cashapp-qr.png" alt="Cash App QR Code for AbyssBeacon donations" width="220">
-  </a>
-</p>
-
-- [$1 - It helped a little](https://cash.app/$AbyssBeacon/1.00)
-- [$5 - Pretty useful](https://cash.app/$AbyssBeacon/5.00)
-- [$10 - Huge time saver](https://cash.app/$AbyssBeacon/10.00)
-- [Custom amount - Game changer](https://cash.app/$AbyssBeacon)
-
-There's absolutely no obligation to donate. Using AbyssBeacon, reporting bugs, suggesting improvements, or simply sharing the project helps too.
-
-## License
-
-AbyssBeacon is licensed under the **GNU General Public License v3.0 only (GPL-3.0-only)**.
-
-You may use, study, modify, and redistribute the project under the terms of GPL-3.0. If you distribute a modified version or other derivative covered by the GPL, the corresponding source must remain available under the GPL terms.
-
-The GPL does not prohibit charging money for copies or distributions. It does require distributed GPL-covered derivatives to preserve the license and source-code freedoms.
-
-See [`LICENSE`](LICENSE) for the complete license text.
-
-Copyright (C) 2026 AbyssBeacon contributors.
-
-
-## Source statistics and scan targeting
-
-Source-colored version pills select the matching About text, gallery and dates.
-Pills use your saved source colors. Matching CivitAI/Red versions share one pill,
-colored for the source with more version downloads; both sources' counts appear
-inside the existing Downloads and Likes boxes. SeaArt's generic Current version
-label is displayed as SeaArt. Version selections use version counts/dates when available. Values
-that only describe a provider listing are labelled accordingly; missing version
-counts are unavailable rather than borrowed from the complete listing.
-
-Most Downloads/Most Likes sort matching architecture versions before pagination.
-Each version is counted once within its provider. Merged cards use the highest
-eligible provider count, without adding mirror totals. Missing version statistics
-sort last. Use **Options > Library > Update Library** to fill missing saved
-CivitAI/Red version statistics and dates. It uses stored data first, then targeted
-requests to the same provider. Temporary failures remain pending for retry;
-unavailable versions are marked checked without erasing old data. A source that
-fails is paused for that update run. A model **Reload** remains available for
-fresh full details. Some providers do not publish every metric. Provider popularity
-figures can also cover different reporting periods.
-
-The SCAN dialog has collapsible Sources, Models to Scan and Model types sections,
-with selected counts and Select All/Clear controls. Model types default to all;
-clearing the type selection requires choosing a type before scanning. Normal
-scans retain their existing result limits and automatic retention/day boundaries.
-The experimental custom lookback controls have been removed from normal scans,
-keyword search and tag discovery. Exact URL imports retain their existing behavior.
-
-
-### Updating an existing library
-
-**Options > Library > Update Library** applies pending metadata upgrades. Large
-libraries may take several hours, especially older CivitAI/Red cards needing
-individual version-statistics requests. Keep AbyssBeacon running and prevent
-sleep until completion. Successfully upgraded entries do not need the same
-upgrade again; when no upgrades remain, the action is unavailable. This metadata
-refresh does not apply the optional existing-library merge proposals.
+AbyssBeacon is distributed under the **[GNU General Public License v3](LICENSE)**. See `LICENSE` for the full terms. It is an independent project and is **not affiliated with or endorsed by** the third-party model services it connects to. Model listings and preview artwork remain subject to their respective creators' and sources' terms.

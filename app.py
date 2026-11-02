@@ -39,8 +39,10 @@ if _missing_dependencies:
     raise SystemExit(1)
 
 import database
+import architecture_seen
 import library_updates
 import installer
+from download_details import annotate_file_details
 import active_downloads
 from scanners.common import metadata, processors
 import scanner_runner
@@ -552,7 +554,7 @@ def _annotate_download_state(model, history_lookup, preferences, source_snapshot
     for snapshot in memberships:
         source = str(snapshot.get("source") or "").strip().lower()
         model_key = str(snapshot.get("model_key") or "").strip()
-        rows = history_lookup.get((source, model_key), []) if tracking else []
+        rows = [row for row in history_lookup.get((source, model_key), []) if not row.get("local_deleted")] if tracking else []
         if not rows:
             continue
 
@@ -648,6 +650,9 @@ def _annotate_download_state(model, history_lookup, preferences, source_snapshot
     else:
         state = "none"
 
+    model["browser_download_requested"] = bool(all_rows) and not any(row.get("local_install") for row in all_rows)
+    if model["browser_download_requested"]:
+        state = "browser"
     model["download_status"] = state
     model["downloaded"] = state in {"downloaded", "update"}
     model["update_available"] = state == "update"
@@ -685,7 +690,8 @@ def _update_available_model_ids(max_age_seconds=10.0):
             try:
                 rows = conn.execute(
                     """SELECT * FROM models
-                       WHERE id IN (SELECT DISTINCT model_id FROM download_history WHERE model_id IS NOT NULL)"""
+                       WHERE id IN (SELECT model_id FROM download_history WHERE model_id IS NOT NULL
+                                    UNION SELECT model_id FROM installed_files WHERE model_id IS NOT NULL)"""
                 ).fetchall()
                 model_ids = [int(row["id"]) for row in rows]
                 snapshots_by_model = {}
@@ -766,7 +772,7 @@ def _source_access_status(source, gated=False, card_data=None):
             # "Downloadable" merely because some older version is public.
             current = next((v for v in versions if isinstance(v, dict)), None)
             if current:
-                state = _version_access_state(current, "public", True)
+                state = _version_access_state(current, "public", True, source_name=source)
                 if state == "downloadable":
                     return "public"
                 if state == "early_access":
@@ -1047,7 +1053,65 @@ def _format_download_size(file_data, source=""):
     return str(file_data.get("size_label") or file_data.get("model_size") or "").strip()
 
 
-def _version_access_state(version, source_access="public", has_files=False):
+from civitai_auth_hint import current_model_signin_hint, version_signin_hint
+from civitai_mini_auth import cache as civitai_mini_cache, cached_require_auth
+
+
+def _civitai_download_token_available(source):
+    """True for a locally configured API credential, not a browser login."""
+    source = str(source or '').strip().lower()
+    if source == 'civitai':
+        return bool(get_source_token('civitai'))
+    if source == 'civitaired':
+        return bool(get_civitaired_credentials().get('session_token'))
+    return False
+
+
+
+@app.route("/api/civitai/version-auth/<int:model_id>/<int:version_id>", methods=["GET"])
+def civitai_version_auth(model_id, version_id):
+    """Bounded on-demand check for a version present on this local CivitAI card.
+
+    No URL supplied by clients, no model-file downloads, and no secret token.
+    The service's cached results expire; source metadata remains unchanged.
+    """
+    from flask import jsonify
+    if version_id <= 0 or version_id > 9999999999:
+        return jsonify({"success": False, "error": "Invalid version"}), 400
+    linked = False
+    for row in database.get_model_sources(model_id):
+        if str(row["source"] or "").lower() != "civitai":
+            continue
+        try:
+            saved = json.loads(row["source_data"] or "{}")
+        except (ValueError, TypeError):
+            saved = {}
+        card = saved.get("card_data") or {}
+        if isinstance(card, str):
+            try: card = json.loads(card)
+            except (ValueError, TypeError): card = {}
+        ids = {str(card.get("version_id") or "")} if isinstance(card, dict) else set()
+        if isinstance(card, dict):
+            ids.update(str(v.get("id")) for v in (card.get("versions") or []) if isinstance(v, dict))
+        ids.update(str(f.get("version_id")) for f in (saved.get("files") or []) if isinstance(f, dict))
+        if str(version_id) in ids:
+            linked = True
+            break
+    if not linked:
+        return jsonify({"success": False, "error": "Version not found on this CivitAI model"}), 404
+
+    if _civitai_download_token_available("civitai"):
+        return jsonify({"success": True, "result": "connected", "require_auth": None})
+    data = civitai_mini_cache.check(version_id)
+    result = {"success": True, **data}
+    response = jsonify(result)
+    if data["result"] == "retry":
+        response.status_code = 429
+        response.headers["Retry-After"] = "2"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+def _version_access_state(version, source_access="public", has_files=False, source_name=""):
     """Return downloadable / early_access / paid_access / gated / unknown."""
     version = version if isinstance(version, dict) else {}
     deadline = str(version.get("early_access_deadline") or "").strip()
@@ -1085,6 +1149,12 @@ def _version_access_state(version, source_access="public", has_files=False):
             pass
     if availability and availability != "public":
         return "gated"
+    # CivitAI's canDownload may describe the anonymous caller, not a paid or
+    # private gate.  If the source expressly says requireAuth, show a sign-in
+    # requirement instead of conflating it with "Gated / no download".
+    if (str(source_name or '').lower() in {'civitai', 'civitaired'}
+            and version.get('require_auth') is True and has_files):
+        return "downloadable"
     if can_download is False:
         return "gated"
     if source_access == "gated":
@@ -1272,6 +1342,7 @@ def _annotate_download_file(file_data, source=""):
     else:
         kind = "Model file" if primary else "Support file"
 
+    annotate_file_details(file_data, source)
     file_data["_download_primary"] = primary
     file_data["_download_directory"] = is_directory
     file_data["_download_kind"] = kind
@@ -1428,11 +1499,36 @@ def _source_version_groups(src):
             for file_data in group_files:
                 file_data["_download_primary"] = id(file_data) in safetensors_ids
 
-        group["files"].sort(key=lambda item: _download_file_sort_key(item, workflow_mode=workflow_mode))
+        if str(src.get("source") or "").lower() in {"civitai", "civitaired"}:
+            # source_primary is provider evidence. `primary` and
+            # _download_primary also represent inferred weight-file visibility.
+            declared_primary = any(
+                f.get("source_primary") is True and not f.get("_download_directory")
+                for f in group_files
+            )
+            for file_data in group_files:
+                if declared_primary:
+                    # Explicit provider relationships outrank extension-based
+                    # inference, including VAEs/encoders in safetensors format.
+                    file_data["_download_primary"] = (
+                        file_data.get("source_primary") is True
+                        and not file_data.get("_download_directory")
+                    )
+            group["files"].sort(key=lambda item: (
+                0 if item.get("source_primary") is True else 1,
+                _download_file_sort_key(item, workflow_mode=workflow_mode),
+            ))
+        else:
+            group["files"].sort(key=lambda item: _download_file_sort_key(item, workflow_mode=workflow_mode))
+        if str(src.get("source") or "").lower() == "civitai" and group.get("id"):
+            mini_auth = cached_require_auth(group["id"])
+            if mini_auth is not None:
+                group["require_auth"] = mini_auth
         group["access_status"] = _version_access_state(
             group,
             src.get("access_status"),
             bool(group.get("files")),
+            source_name=src.get("source"),
         )
     return groups
 
@@ -2036,6 +2132,18 @@ def source_accounts_test():
 def test_install_path():
     payload = request.get_json(silent=True) or {}
     raw = str(payload.get("path") or "").strip()
+    if payload.get("destination") == "custom":
+        import tempfile
+        try:
+            path = installer.configured_install_root({"install_destination":"custom", "custom_library_root":raw})
+            if path is None or not path.is_dir():
+                raise ValueError("Choose an existing custom model folder.")
+            with tempfile.TemporaryFile(dir=path):
+                pass
+        except (ValueError, OSError) as error:
+            return {"success":False, "message":str(error)}, 400
+        return {"success":True, "normalized_path":str(path), "message":"Custom model folder is writable."}
+
     if not raw:
         return {"success": False, "message": "Choose your ComfyUI folder first."}, 400
 
@@ -2343,7 +2451,7 @@ def _check_download_watchlist_after_scan(model_id=None, refresh=True):
     return stats
 
 
-def _queue_local_install(item, snapshot, version, file_data):
+def _queue_local_install(item, snapshot, version, file_data, choice=None):
     """Install a queue item through the same Local Installer + Active Downloads pipeline."""
     model_id=int(item.get("model_id") or 0)
     source_name=str(item.get("source") or "").lower()
@@ -2383,13 +2491,15 @@ def _queue_local_install(item, snapshot, version, file_data):
     if str(prefs.get("download_behavior") or "browser").lower()!="local":
         raise RuntimeError("Download When Available requires Library → Local Installer.")
 
+    prefs=_install_choice(model,file_data,prefs,query=choice or {})
+    if choice and choice.get('remember_install')=='1':_remember_install_choice(prefs)
     filename=str(file_data.get("name") or file_data.get("path") or "Model file").split("/")[-1]
     job_id=active_downloads.create_job(
         model_id=model_id,
         model_name=str(model.get("display_name") or model.get("name") or filename),
         source=source_name,
         filename=filename,
-        retry_url=f"/download/source/{model_id}/{source_name}/{file_index}",
+        retry_url=f"/download/source/{model_id}/{source_name}/{file_index}?save_info={1 if prefs.get('save_model_info',True) else 0}&save_preview={1 if prefs.get('save_model_preview',True) else 0}&"+prefs['_install_choice_query'],
         total_bytes=file_data.get("size_bytes") or file_data.get("size") or 0,
     )
     def progress(stage=None, downloaded_bytes=None, total_bytes=None, part_path=None):
@@ -2448,6 +2558,7 @@ def _queue_local_install(item, snapshot, version, file_data):
         fingerprint,result.get("path"),result.get("filename"),
         file_data.get("version_id") or "",
         file_data.get("version") or "",
+        install_category=prefs["_install_category"],
     )
     return result
 
@@ -2491,6 +2602,9 @@ def _check_download_queue_after_scan():
             else:
                 database.update_download_queue_item(queue_id,status="ready",last_checked=now,last_error="",release_at=release_at)
                 stats["ready"].append(label)
+        except InstallChoiceRequired as exc:
+            database.update_download_queue_item(queue_id,status="ready",last_checked=now,last_error=str(exc))
+            stats["ready"].append(label)
         except installer.DownloadCancelled:
             database.update_download_queue_item(queue_id,status="ready",last_checked=now,last_error="Automatic install was canceled.")
             stats["ready"].append(str(item.get("model_name") or item.get("model_key") or "Queued model"))
@@ -2546,6 +2660,20 @@ def download_queue_api():
     if not link:
         return {"success":False,"error":"This source is no longer attached to the model."},404
     model_key=str(link.get("model_key") or "")
+    if data.get("remove") is True:
+        conn=database.connect()
+        try:
+            with conn:
+                conn.execute("""DELETE FROM download_queue WHERE model_id=? AND source=? AND model_key=?
+                    AND version_id=? AND (?<>'' OR lower(version_name)=lower(?))
+                    AND status NOT IN ('completed','installing')""",
+                    (model_id,source,model_key,version_id,version_id,version_name))
+                installing=conn.execute("""SELECT 1 FROM download_queue WHERE model_id=? AND source=? AND model_key=?
+                    AND version_id=? AND (?<>'' OR lower(version_name)=lower(?)) AND status='installing'""",
+                    (model_id,source,model_key,version_id,version_id,version_name)).fetchone()
+                if installing:return {"success":False,"error":"Installation has started. Open Active downloads to manage it."},409
+        finally:conn.close()
+        return {"success":True}
     release_at=str(data.get("release_at") or "")
     database.add_download_queue_item(
         model_id,source,model_key,version_id,version_name,
@@ -2575,9 +2703,12 @@ def download_queue_install(queue_id):
         if not file_data:
             return {"success":False,"error":"No downloadable model file was found for this version."},409
         database.update_download_queue_item(queue_id,status="installing",last_error="")
-        result=_queue_local_install(item,snapshot,version,file_data)
+        result=_queue_local_install(item,snapshot,version,file_data,choice=request.args)
         database.update_download_queue_item(queue_id,status="completed",last_checked=datetime.now(timezone.utc).isoformat(),last_error="")
         return {"success":True,**result}
+    except InstallChoiceRequired as exc:
+        database.update_download_queue_item(queue_id,status="ready",last_error=str(exc))
+        return {"success":False,"needs_destination":True,"options":exc.options,"error":str(exc)},409
     except Exception as exc:
         database.update_download_queue_item(queue_id,status="ready",last_error=str(exc))
         return {"success":False,"error":str(exc)},502
@@ -2618,6 +2749,16 @@ def download_watchlist_api():
     model_key=str(link.get("model_key") or "")
     file_id=str(file_data.get("model_file_id") or file_data.get("id") or file_data.get("file_id") or "")
     file_name=str(file_data.get("name") or file_data.get("path") or "Model file").split("/")[-1]
+    if data.get("remove") is True:
+        conn=database.connect()
+        try:
+            with conn:
+                conn.execute("""DELETE FROM download_watchlist WHERE model_id=? AND source=? AND model_key=?
+                    AND (CASE WHEN ?<>'' THEN version_id=? ELSE lower(version_name)=lower(?) END)
+                    AND (CASE WHEN ?<>'' THEN file_id=? ELSE lower(file_name)=lower(?) END)""",
+                    (model_id,source,model_key,str(version.get("id") or ""),str(version.get("id") or ""),version.get("name") or "",file_id,file_id,file_name))
+        finally:conn.close()
+        return {"success":True}
     database.add_download_watch_item(
         model_id,source,model_key,str(version.get("id") or data.get("version_id") or ""),
         str(version.get("name") or data.get("version_name") or ""),
@@ -3654,6 +3795,24 @@ def refresh_download_sources(model_id):
 
     print(f"RELOAD COMPLETE: {refreshed_count}/{len(sources)} sources refreshed")
 
+    merge_result = {"removed_ids": []}
+    if refreshed_count and not scan_status.scan_running:
+        try:
+            from model_merge_repair import reconcile
+            # Keep job registration serialized while card IDs are folded. Even
+            # paused/failed/completed jobs still visible in the manager defer
+            # reconciliation until they no longer reference either card.
+            with active_downloads._LOCK:
+                blocked_ids = {
+                    int(job["model_id"]) for job in active_downloads.snapshot().get("items", [])
+                    if str(job.get("model_id") or "").isdigit()
+                }
+                merge_result = reconcile(database, model_id, blocked_ids)
+        except Exception as merge_exc:
+            # A repair failure must not undo the successful metadata reload.
+            print(f"Duplicate reconciliation skipped: {type(merge_exc).__name__}")
+            merge_result = {"removed_ids": [], "reason": "repair_failed"}
+
     if refreshed_count:
         try:
             _check_download_watchlist_after_scan(model_id=model_id, refresh=False)
@@ -3665,6 +3824,10 @@ def refresh_download_sources(model_id):
         message = f"Reloaded {refreshed_count} of {len(sources)} source{'s' if len(sources) != 1 else ''}."
         if failed:
             message += " Some sources could not be refreshed."
+        if merge_result["removed_ids"]:
+            message += " Merged the matching CivitAI/Red card."
+        elif merge_result.get("reason") == "download_jobs":
+            message += " Duplicate merge deferred while download jobs reference these cards."
 
         # Return the freshly persisted card identity as part of Reload Model.
         # The feed DOM may still contain the pre-reload type/name until a full
@@ -3695,6 +3858,7 @@ def refresh_download_sources(model_id):
             "refreshed": refreshed_count,
             "total": len(sources),
             "results": results,
+            "merge": merge_result,
             "card": refreshed_card,
             "is_collection": is_collection,
             "collection_url": url_for("collection_page", model_id=model_id) if is_collection else "",
@@ -3707,6 +3871,67 @@ def refresh_download_sources(model_id):
         "total": len(sources),
         "results": results,
     }, 502
+
+
+class InstallChoiceRequired(ValueError):
+    def __init__(self,model,file_data,prefs,detected):
+        import install_choices
+        root=installer.configured_install_root(prefs)
+        self.options={'success':True,'types':install_choices.TYPES,'detected':detected,'category':installer.UNKNOWN_CATEGORY,'folder':'','paths':{k:str(installer.install_directory(root,model,model.get('source'),dict(prefs,_install_category=k,_install_folder=''),installer.original_filename(file_data),file_data)) if root else '' for k in install_choices.TYPES}}
+        super().__init__('Choose a download destination: this file would be saved in Other.')
+
+
+def _install_choice(model, file_data, prefs, query=None):
+    import install_choices
+    from urllib.parse import urlencode
+    query=request.args if query is None else query
+    prefs=dict(prefs)
+    detected=installer.comfy_category_for_model(model,installer.original_filename(file_data),file_data)
+    key=json.dumps([str(model.get('source') or ''),str(model.get('model_key') or ''),detected])
+    saved=prefs.get('model_install_choices',{}).get(key,{})
+    category=query.get('install_category',saved.get('category',detected))
+    folder=query.get('install_folder',saved.get('folder','')).strip()
+    if category not in install_choices.TYPES:raise ValueError('Choose a valid install type.')
+    if folder and (not Path(folder).expanduser().is_absolute() or not Path(folder).expanduser().is_dir()):
+        raise ValueError('Choose an existing full destination folder.')
+    if category==installer.UNKNOWN_CATEGORY and not folder and query.get('allow_other')!='1' and not saved.get('confirmed_other'):
+        raise InstallChoiceRequired(model,file_data,prefs,detected)
+    prefs['_install_category']=category;prefs['_install_folder']=folder
+    prefs['_confirmed_other']=category==installer.UNKNOWN_CATEGORY and not folder
+    prefs['_install_choice_key']=key
+    prefs['_install_choice_query']=urlencode({'install_category':category,'install_folder':folder,'allow_other':'1' if prefs['_confirmed_other'] else '0'})
+    return prefs
+
+
+def _remember_install_choice(prefs):
+    if request.args.get('remember_install')=='1':
+        settings=load_settings();choices=settings.setdefault('preferences',{}).setdefault('model_install_choices',{})
+        choices[prefs['_install_choice_key']]={'category':prefs['_install_category'],'folder':prefs['_install_folder'],'confirmed_other':prefs.get('_confirmed_other',False)}
+        save_settings(settings)
+
+
+@app.route('/api/install-options/<int:model_id>/<source>/<int:file_index>')
+def install_options(model_id,source,file_index):
+    import install_choices
+    conn=database.connect();row=conn.execute('SELECT * FROM models WHERE id=?',(model_id,)).fetchone();conn.close()
+    if not row:return {'success':False,'error':'Model not found.'},404
+    model=dict(row)
+    if source!='canonical':
+        link=next((dict(r) for r in database.get_model_sources(model_id) if str(r['source']).lower()==source.lower()),None)
+        if not link:return {'success':False,'error':'Source not found.'},404
+        model=_decode_source_snapshot(link,model)
+    file_data=_load_download_file(model,file_index)
+    if not file_data:return {'success':False,'error':'File not found.'},404
+    prefs=load_settings().get('preferences',{})
+    try:
+        root = installer.configured_install_root(prefs)
+    except ValueError as error:
+        return {'success':False, 'error':str(error)}, 400
+    detected=installer.comfy_category_for_model(model,installer.original_filename(file_data),file_data)
+    key=json.dumps([str(model.get('source') or ''),str(model.get('model_key') or ''),detected])
+    saved=prefs.get('model_install_choices',{}).get(key,{})
+    paths={k:str(installer.install_directory(root,model,model.get('source'),dict(prefs,_install_category=k,_install_folder=''),installer.original_filename(file_data),file_data)) if root else '' for k in install_choices.TYPES}
+    return {'success':True,'types':install_choices.TYPES,'detected':detected,'category':saved.get('category',detected),'folder':saved.get('folder',''),'confirmed_other':bool(saved.get('confirmed_other')),'paths':paths}
 
 
 def _download_sidecar_preferences(preferences):
@@ -3803,6 +4028,7 @@ def tracked_source_download(model_id, source, file_index):
 
         download_job_id = None
         if not force_browser_download and str(prefs.get("download_behavior") or "browser").lower() == "local":
+            prefs = _install_choice(model, file_data, prefs)
             _job_filename = str(file_data.get("name") or file_data.get("path") or "Model file").split("/")[-1]
             _job_model_name = str(model.get("display_name") or model.get("name") or _job_filename or "Model")
             try:
@@ -3816,10 +4042,18 @@ def tracked_source_download(model_id, source, file_index):
                 f"?save_info={1 if prefs.get('save_model_info', True) else 0}"
                 f"&save_preview={1 if prefs.get('save_model_preview', True) else 0}"
             )
+            _legacy_retry_url = _retry_url
+            _retry_url += "&" + prefs['_install_choice_query']
             _matching_job = active_downloads.find_matching(
                 model_id=model_id, source=source_name, filename=_job_filename,
                 retry_url=_retry_url,
             )
+            if not _matching_job and not request.args.get('install_category') and not request.args.get('install_folder'):
+                _matching_job = active_downloads.find_matching(model_id=model_id,source=source_name,filename=_job_filename,retry_url=_legacy_retry_url)
+                if _matching_job and _resume_requested:
+                    # The legacy partial predates local overrides; use original routing.
+                    prefs.pop('_install_category',None);prefs.pop('_install_folder',None)
+                    prefs['_install_category']=installer.comfy_category_for_model(model,_job_filename,file_data)
             if _matching_job and _matching_job.get("status") in {"starting", "downloading", "installing", "canceling", "pausing"}:
                 return {"success": True, "already_active": True, "job_id": _matching_job.get("id")}, 200
             if _requested_job_id and _matching_job and str(_matching_job.get("id")) == _requested_job_id:
@@ -3899,8 +4133,10 @@ def tracked_source_download(model_id, source, file_index):
             database.record_installed_file(
                 model_id, source_name, model.get("model_key"), source_file_id,
                 fingerprint, result.get("path"), result.get("filename"),
-                file_data.get("version_id") or "", file_data.get("version") or ""
+                file_data.get("version_id") or "", file_data.get("version") or "",
+                install_category=prefs["_install_category"]
             )
+            _remember_install_choice(prefs)
             return {"success": True, "installed": True, **result}
 
         if track_this_download:
@@ -3984,6 +4220,7 @@ def tracked_model_download(model_id, file_index):
         source_file_id = file_data.get("model_file_id") or file_data.get("id") or file_data.get("file_id") or ""
         download_job_id = None
         if str(prefs.get("download_behavior") or "browser").lower() == "local":
+            prefs = _install_choice(model, file_data, prefs)
             _job_filename = str(file_data.get("name") or file_data.get("path") or "Model file").split("/")[-1]
             _job_model_name = str(model.get("display_name") or model.get("name") or _job_filename or "Model")
             try:
@@ -3997,10 +4234,18 @@ def tracked_model_download(model_id, file_index):
                 f"?save_info={1 if prefs.get('save_model_info', True) else 0}"
                 f"&save_preview={1 if prefs.get('save_model_preview', True) else 0}"
             )
+            _legacy_retry_url = _retry_url
+            _retry_url += "&" + prefs['_install_choice_query']
             _matching_job = active_downloads.find_matching(
                 model_id=model_id, source=source_name, filename=_job_filename,
                 retry_url=_retry_url,
             )
+            if not _matching_job and not request.args.get('install_category') and not request.args.get('install_folder'):
+                _matching_job = active_downloads.find_matching(model_id=model_id,source=source_name,filename=_job_filename,retry_url=_legacy_retry_url)
+                if _matching_job and _resume_requested:
+                    # The legacy partial predates local overrides; use original routing.
+                    prefs.pop('_install_category',None);prefs.pop('_install_folder',None)
+                    prefs['_install_category']=installer.comfy_category_for_model(model,_job_filename,file_data)
             if _matching_job and _matching_job.get("status") in {"starting", "downloading", "installing", "canceling", "pausing"}:
                 return {"success": True, "already_active": True, "job_id": _matching_job.get("id")}, 200
             if _requested_job_id and _matching_job and str(_matching_job.get("id")) == _requested_job_id:
@@ -4080,8 +4325,10 @@ def tracked_model_download(model_id, file_index):
             database.record_installed_file(
                 model_id, source_name, model.get("model_key"), source_file_id,
                 fingerprint, result.get("path"), result.get("filename"),
-                file_data.get("version_id") or "", file_data.get("version") or ""
+                file_data.get("version_id") or "", file_data.get("version") or "",
+                install_category=prefs["_install_category"]
             )
+            _remember_install_choice(prefs)
             return {"success": True, "installed": True, **result}
         if prefs.get("track_downloads", True) is not False:
             database.record_download(
@@ -4216,6 +4463,7 @@ def installed_files_for_model(model_id):
             "version_name": str(row.get("version_name") or ""),
             "exists": path.is_file(),
             "size_bytes": int(size_bytes or 0),
+            "relocated": bool(row.get('location_updated_at')),
         })
     if request.method == "GET":
         return {"success": True, "files": files}
@@ -4263,6 +4511,8 @@ def installed_files_for_model(model_id):
         for row in remaining if str(row.get("local_path") or "").strip()
     }
     for folder in affected_folders:
+        if any(item.get('relocated') and Path(item['path']).parent==folder for item in selected):
+            continue
         if folder in remaining_folders:
             continue
         # Only folders whose selected model files were successfully removed are
@@ -4351,6 +4601,576 @@ def download_history_clear_model(model_id):
         selected_ids = [row.get("id") for row in rows]
     result = database.forget_download_history_records(model_id, selected_ids)
     return {"success": True, "deleted": result.get("history", 0), "forgot_installed": result.get("installed", 0), "model_id": model_id}
+
+
+@app.route("/downloaded")
+def downloaded_library_page():
+    import download_reviews
+    past = request.args.get("history") == "1"
+    selected_source = request.args.get("source","")
+    state=str(request.args.get("state") or "")
+    query=str(request.args.get("q") or "")[:200]
+    architecture=str(request.args.get("architecture") or "")
+    model_type=str(request.args.get("model_type") or "")
+    download_order=str(request.args.get('sort') or 'newest')
+    if download_order not in {'newest','oldest'}:download_order='newest'
+    try:page=max(1,int(request.args.get("page") or 1))
+    except ValueError:page=1
+    settings=load_settings();preferences=settings.get("preferences",{})
+    sources=settings.get("sources",{})
+    conn=database.connect()
+    try:
+        library_empty = conn.execute("SELECT count(*) FROM installed_files").fetchone()[0] == 0
+        browser_request = conn.execute("""SELECT h.id,h.filename FROM download_history h
+            WHERE NOT EXISTS(SELECT 1 FROM installed_files i
+                WHERE lower(i.source)=lower(h.source) AND i.model_key=h.model_key AND
+                ((h.file_fingerprint!='' AND i.file_fingerprint=h.file_fingerprint)
+                 OR (h.source_file_id!='' AND i.source_file_id=h.source_file_id)))
+            AND NOT EXISTS(SELECT 1 FROM download_reviews r
+                WHERE lower(r.source)=lower(h.source) AND r.model_key=h.model_key AND
+                ((h.file_fingerprint!='' AND r.file_fingerprint=h.file_fingerprint)
+                 OR (h.source_file_id!='' AND r.source_file_id=h.source_file_id)))
+            ORDER BY h.id DESC LIMIT 1""").fetchone()
+        source_counts = conn.execute("""SELECT lower(r.source) AS source,
+            EXISTS(SELECT 1 FROM installed_files i WHERE i.review_id=r.id) AS tracked, count(*) AS n
+            FROM download_reviews r GROUP BY 1,2""").fetchall()
+        past_count = sum(r["n"] for r in source_counts if not r["tracked"])
+        available_sources = sorted(r["source"] for r in source_counts if r["source"] and bool(r["tracked"]) != past)
+        card_ids=None
+        if architecture or model_type or request.args.get('starred')=='1':
+            conditions=[];params=[]
+            if architecture:
+                condition,arguments=_architecture_filter_condition(architecture)
+                if condition:conditions.append(condition);params.extend(arguments)
+
+            if request.args.get('starred')=='1':conditions.append('favorite=1')
+            card_ids=[r[0] for r in conn.execute('SELECT id FROM models WHERE '+' AND '.join(conditions),params)] if conditions else None
+        import install_choices
+        # Classify only search candidates when filtering, otherwise only the returned page.
+        category_rows=[]
+        if model_type:
+            category_rows=conn.execute("SELECT r.*,i.model_id AS installed_model_id FROM download_reviews r LEFT JOIN installed_files i ON i.review_id=r.id WHERE (?='' OR "+download_reviews.search_clause()+")",(query,query,query,query)).fetchall()
+        review_categories=install_choices.categories(conn,category_rows)
+        selected_category=installer.comfy_category(model_type) if model_type else None
+        if model_type in install_choices.TYPES:selected_category=model_type
+        review_ids=[ident for ident,cat in review_categories.items() if cat==selected_category] if model_type else None
+        try:result=download_reviews.grouped_page(conn,state,query,page,card_ids=card_ids,hearted=False,sort=download_order,review_ids=review_ids,include_history=False,history_only=past,source=selected_source)
+        except ValueError:return "Invalid review state",400
+        if not model_type:
+            review_categories=install_choices.categories(conn,[f for g in result['groups'] for f in g['files']])
+        ids=[g['files'][0]['card_id'] for g in result['groups'] if g['files'][0]['card_id']]
+        snapshot_rows=conn.execute('SELECT source,model_key,source_data FROM model_sources WHERE model_id IN (SELECT value FROM json_each(?))',(json.dumps(ids),)).fetchall()
+        snapshots={(r['source'],r['model_key']):r['source_data'] for r in snapshot_rows}
+        rows=conn.execute("SELECT * FROM models WHERE id IN (SELECT value FROM json_each(?))",(json.dumps(ids),)).fetchall()
+    finally:conn.close()
+    models=_prepare_feed_chunk_models([dict(r) for r in rows],preferences,sources)
+    lookup={m['id']:m for m in models}
+    for group in result['groups']:
+        model=lookup.get(group['files'][0]['card_id'])
+        if model and _normalize_maturity_mode(preferences.get('selected_sensitive','hide'))!='show' and model.get('sensitive'):
+            model['image']='';model['card_video']='';model['has_video']=False
+        group['model']=model
+        for file in group['files']:
+            from file_format_detection import needs_extension
+            file['extension_unresolved']=bool(file.get('tracked') and needs_extension(file.get('filename') or ''))
+            file['install_type_label']=install_choices.TYPES.get(review_categories.get(file['id']),'Unknown type')
+            file['architecture_label']='Architecture not recorded'
+            # Disk I/O is deferred until Storage location is opened. Offline drives
+            # must not hold up text searches or page rendering.
+            file['location_state']='unchecked'
+            # Use the exact saved source/version, never guess from filename or size.
+            try:snapshot=json.loads(snapshots.get((file['source'],file['model_key'])) or '{}')
+            except (TypeError,ValueError):snapshot={}
+            if not isinstance(snapshot,dict):snapshot={}
+            card_data=snapshot.get('card_data') or {}
+            if isinstance(card_data,str):
+                try:card_data=json.loads(card_data)
+                except ValueError:card_data={}
+            versions=snapshot.get('versions') or (card_data.get('versions') if isinstance(card_data,dict) else []) or []
+            matches=[v for v in versions if isinstance(v,dict) and str(v.get('id') or '')==str(file.get('version_id') or '') and file.get('version_id')]
+            raw=str(matches[0].get('architecture') or matches[0].get('base_model') or '') if len(matches)==1 else ''
+            if not raw and model and len(model.get('architecture_list',[]))==1:raw=model['architecture_list'][0]
+            if raw:
+                classified=processors.classify_architecture(raw)
+                file['architecture_label']=classified if classified!='Other' else raw
+    context=dict(result,library_empty=library_empty,browser_request=dict(browser_request) if browser_request else None,past=past,past_count=past_count,available_sources=available_sources,selected_source=selected_source,state=state,query=query,preferences=preferences,download_order=download_order,architecture=architecture,model_type=model_type,starred=request.args.get('starred')=='1',architectures=list(load_architectures()),model_types=list(install_choices.TYPES.values()),
+        source_colors={name:preferences.get('source_card_colors',{}).get(name,info.get('color','#00eaff')) for name,info in SOURCE_INFO.items()})
+    if request.args.get('format')=='json':
+        return {'success':True,'total':result['total'],'html':render_template('components/downloaded_groups.html',**context),'has_more':page<result['pages'],'next_page':page+1}
+    return render_template('downloaded.html',**context)
+
+
+@app.route('/api/local-inventory', methods=['POST'])
+def local_inventory_start():
+    import local_inventory
+    payload=request.get_json(silent=True) or {}
+    roots=payload.get('folders') if isinstance(payload,dict) else None
+    if not isinstance(roots,list) or not 1<=len(roots)<=20 or any(not isinstance(p,str) or not p.strip() or not Path(p.strip()).expanduser().is_absolute() for p in roots):
+        return {'success':False,'error':'Choose up to 20 full folder paths.'},400
+    try:
+        key=local_inventory.start(database.connect,[p.strip() for p in roots],payload.get('rehash') is True)
+        return {'success':True,'job_id':key}
+    except ValueError as exc:return {'success':False,'error':str(exc)},409
+
+@app.route('/api/local-inventory/<job_id>', methods=['GET','POST'])
+def local_inventory_status(job_id):
+    import local_inventory
+    try:return {'success':True,**local_inventory.status(job_id,cancel=request.method=='POST')}
+    except ValueError as exc:return {'success':False,'error':str(exc)},404
+
+@app.route('/api/local-inventory/<job_id>/open-folder', methods=['POST'])
+def local_inventory_open_folder(job_id):
+    import local_inventory
+    payload=request.get_json(silent=True) or {}
+    selected=payload.get('path') if isinstance(payload,dict) else None
+    try:
+        job=local_inventory.status(job_id)
+        if job['status']!='complete' or not any(f['path']==selected for f in job['result']['files']):
+            return {'success':False,'error':'Choose a file from the completed scan.'},400
+        path=Path(selected)
+        folder=path.parent
+        if not folder.is_dir():return {'success':False,'error':'This folder no longer exists. Scan again to refresh results.'},404
+        # Open Explorer, never the model itself. No shell interpolation.
+        if os.name=='nt':
+            if path.is_file():subprocess.Popen(['explorer.exe','/select,',str(path)])
+            else:os.startfile(str(folder))
+        elif sys.platform=='darwin':
+            subprocess.Popen(['open','-R',str(path)] if path.is_file() else ['open',str(folder)])
+        else:subprocess.Popen(['xdg-open',str(folder)])
+        return {'success':True}
+    except ValueError as exc:return {'success':False,'error':str(exc)},404
+    except OSError as exc:return {'success':False,'error':f'Could not open folder: {exc}'},500
+
+@app.route('/api/local-inventory/<job_id>/recycle-copy', methods=['POST'])
+def local_inventory_recycle_copy(job_id):
+    import local_inventory
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return {'success': False, 'error': 'Choose a duplicate from the completed scan.'}, 400
+    try:
+        answer = local_inventory.recycle_copy(job_id, payload.get('path'), payload.get('sha256'), database.connect)
+        return {'success': True, **answer}
+    except ValueError as exc:
+        return {'success': False, 'error': str(exc)}, 409
+    except OSError as exc:
+        return {'success': False, 'error': f'Cannot recycle file: {exc}'}, 500
+
+
+@app.route('/api/repair-path/<kind>/<job_id>/open-folder', methods=['POST'])
+def repair_path_open_folder(kind, job_id):
+    payload=request.get_json(silent=True) or {}
+    selected=payload.get('path') if isinstance(payload,dict) else None
+    try:
+        allowed=set()
+        if kind=='extension':
+            with _extension_repair_lock:
+                job=_extension_repair_jobs.get(job_id)
+                if job and job.get('status')=='complete':allowed.update(i['path'] for i in job['items'])
+        elif kind=='recovery':
+            import installed_recovery
+            job=installed_recovery.status(job_id,limit=1000000000,include_current=True,include_missing=True)
+            for row in job['results']:
+                allowed.add(row['old_path'])
+                allowed.update(c['path'] for c in row['candidates'])
+            allowed.update(f['path'] for f in job['unknown'])
+        if not isinstance(selected,str) or selected not in allowed:
+            return {'success':False,'error':'Choose a path from this scan.'},400
+        path=Path(selected);folder=path.parent
+        if not folder.is_dir():return {'success':False,'error':'This folder no longer exists.'},404
+        if os.name=='nt':
+            if path.is_file():subprocess.Popen(['explorer.exe','/select,',str(path)])
+            else:os.startfile(str(folder))
+        elif sys.platform=='darwin':subprocess.Popen(['open','-R',str(path)] if path.is_file() else ['open',str(folder)])
+        else:subprocess.Popen(['xdg-open',str(folder)])
+        return {'success':True}
+    except ValueError as exc:return {'success':False,'error':str(exc)},404
+    except OSError as exc:return {'success':False,'error':f'Could not open folder: {exc}'},500
+
+@app.route('/api/local-model-link/search')
+def local_model_link_search():
+    import local_model_link
+    return {'success':True,'models':local_model_link.search(request.args.get('q',''))}
+
+@app.route('/api/local-inventory/<job_id>/link-preview',methods=['POST'])
+def local_model_link_preview(job_id):
+    import local_model_link
+    payload=request.get_json(silent=True) or {}
+    try:return {'success':True,**local_model_link.prepare(job_id,payload,load_settings())}
+    except Exception as exc:return {'success':False,'error':str(exc)},400
+
+@app.route('/api/local-model-link/apply',methods=['POST'])
+def local_model_link_apply():
+    import local_model_link
+    payload=request.get_json(silent=True) or {}
+    if scan_status.scan_running:return {'success':False,'error':'Finish the source scan first.'},409
+    try:return {'success':True,**local_model_link.apply(payload.get('token'),payload.get('file_index'),payload.get('confirm'))}
+    except (ValueError,OSError) as exc:return {'success':False,'error':str(exc)},400
+
+@app.route('/api/local-inventory/<job_id>/identify', methods=['POST'])
+def local_inventory_identify(job_id):
+    import civarchive_lookup
+    payload=request.get_json(silent=True) or {}
+    try:
+        key=civarchive_lookup.start(job_id,payload.get('paths') if isinstance(payload,dict) else None)
+        return {'success':True,'job_id':key}
+    except ValueError as exc:return {'success':False,'error':str(exc)},400
+
+@app.route('/api/civarchive-identify/<job_id>', methods=['GET','POST'])
+def civarchive_identify_status(job_id):
+    import civarchive_lookup
+    try:return {'success':True,**civarchive_lookup.status(job_id,stop=request.method=='POST')}
+    except ValueError as exc:return {'success':False,'error':str(exc)},404
+
+@app.route('/api/civarchive-identify/<job_id>/import-preview', methods=['POST'])
+def local_import_preview(job_id):
+    import local_model_import
+    payload=request.get_json(silent=True) or {}
+    if not isinstance(payload,dict):return {'success':False,'error':'Select identified files.'},400
+    try:return {'success':True,**local_model_import.plan(job_id,payload.get('paths'),payload.get('move') is True,payload.get('companions') is True,_civitai_include_mature_media_enabled(),choices=payload.get('choices'))}
+    except (ValueError,OSError) as exc:return {'success':False,'error':str(exc)},400
+
+@app.route('/api/local-model-import/apply', methods=['POST'])
+def local_import_apply():
+    import local_model_import
+    payload=request.get_json(silent=True) or {}
+    if not isinstance(payload,dict):return {'success':False,'error':'Review the import first.'},400
+    if scan_status.scan_running or any(j.get('status') not in {'complete','canceled','failed','error'} for j in active_downloads.snapshot()['items']):
+        return {'success':False,'error':'Finish source scans and downloads before saving local imports.'},409
+    try:return {'success':True,'results':local_model_import.apply(str(payload.get('token') or ''))}
+    except ValueError as exc:return {'success':False,'error':str(exc)},400
+
+_extension_repair_lock = threading.RLock()
+_extension_repair_jobs = {}
+
+@app.route('/api/extension-repair', methods=['POST'])
+def extension_repair_start():
+    import secrets
+    import extension_repair
+    payload=request.get_json(silent=True) or {}
+    roots=payload.get('folders') if isinstance(payload,dict) else None
+    if not isinstance(roots,list) or not 1<=len(roots)<=20 or any(not isinstance(p,str) or not p.strip() or not Path(p.strip()).expanduser().is_absolute() for p in roots):
+        return {'success':False,'error':'Choose up to 20 full folder paths.'},400
+    job_id=secrets.token_urlsafe(18)
+    job={'status':'running','items':[],'errors':[]}
+    with _extension_repair_lock:
+        if any(j['status']=='running' for j in _extension_repair_jobs.values()):
+            return {'success':False,'error':'A filename scan is already running.'},409
+        _extension_repair_jobs.clear();_extension_repair_jobs[job_id]=job
+    def worker():
+        conn=None
+        try:
+            conn=database.connect();items,errors=extension_repair.preview(conn,roots)
+            with _extension_repair_lock:job.update(status='complete',items=items,errors=errors)
+        except Exception as exc:
+            with _extension_repair_lock:job.update(status='error',errors=[str(exc)])
+        finally:
+            if conn is not None:conn.close()
+    threading.Thread(target=worker,daemon=True,name='ExtensionRepair').start()
+    return {'success':True,'job_id':job_id}
+
+@app.route('/api/extension-repair/<job_id>', methods=['GET'])
+def extension_repair_status(job_id):
+    with _extension_repair_lock:
+        job=_extension_repair_jobs.get(job_id)
+        if not job:return {'success':False,'error':'Scan expired; scan again.'},404
+        return {'success':True,**job}
+
+@app.route('/api/extension-repair/<job_id>/apply', methods=['POST'])
+def extension_repair_apply(job_id):
+    import extension_repair
+    payload=request.get_json(silent=True) or {}
+    choices=payload.get('choices') if isinstance(payload,dict) else None
+    if not isinstance(choices,list) or not 1<=len(choices)<=100:
+        return {'success':False,'error':'Select 1–100 files at a time.'},400
+    results=[];conn=database.connect()
+    try:
+        with _extension_repair_lock, active_downloads._LOCK:
+            job=_extension_repair_jobs.get(job_id)
+            if not job or job['status']!='complete':return {'success':False,'error':'Scan expired or is not complete.'},409
+            for choice in choices:
+                if not isinstance(choice,dict):
+                    results.append({'index':None,'success':False,'error':'Invalid selection.'});continue
+                try:
+                    index=choice.get('index')
+                    if type(index) is not int or not 0<=index<len(job['items']):raise ValueError('Invalid selection.')
+                    item=job['items'][index]
+                    if item.get('done'):raise ValueError('This file was already repaired.')
+                    if _installed_recovery_busy(conn,item.get('review_id'),item['path']):raise ValueError('Finish active scans or downloads before repairing this file.')
+                    target=extension_repair.apply_one(conn,item,choice.get('extension'))
+                    item['done']=True;results.append({'index':index,'success':True,'path':target})
+                except (ValueError,OSError,sqlite3.Error) as exc:results.append({'index':choice.get('index'),'success':False,'error':str(exc)})
+    finally:conn.close()
+    return {'success':True,'results':results}
+
+def _installed_recovery_busy(conn, review_id, path=''):
+    if scan_status.scan_running or scan_status.get_status().get('status') in {'running','stopping'}:return True
+    row=conn.execute('''SELECT COALESCE(i.model_id,ms.model_id) AS model_id FROM download_reviews r
+        LEFT JOIN installed_files i ON i.review_id=r.id LEFT JOIN model_sources ms ON ms.source=r.source AND ms.model_key=r.model_key WHERE r.id=?''',(review_id,)).fetchone()
+    for job in active_downloads.snapshot()['items']:
+        if job.get('status') in {'complete','canceled'}:continue
+        if row and row['model_id'] is not None and str(job.get('model_id'))==str(row['model_id']):return True
+        part=str(job.get('part_path') or '')
+        if part and path and Path(part).parent==Path(path).parent:return True
+    return False
+
+
+@app.route('/api/installed-recovery',methods=['GET','POST'])
+def installed_recovery_start():
+    import installed_recovery
+    prefs=load_settings().get('preferences',{})
+    try:
+        default_root = installer.configured_install_root(prefs)
+    except ValueError:
+        default_root = None
+    if default_root and prefs.get('install_destination') != 'custom' and (default_root/'models').is_dir():
+        default_root = default_root/'models'
+    defaults=prefs.get('installed_scan_folders') or ([str(default_root)] if default_root else [])
+    if request.method=='GET':return {'success':True,'folders':[v for v in defaults if v]}
+    payload=request.get_json(silent=True)
+    try:
+        if not isinstance(payload,dict):raise ValueError('Choose folders or a file to check.')
+        selected=payload.get('path');review_id=payload.get('review_id')
+        if selected:
+            if type(review_id) is not int:raise ValueError('Choose a saved download first.')
+            path,_=installed_recovery.safe_file(str(selected));selected=str(path)
+            c=database.connect()
+            try:
+                if not installed_recovery.records(c,review_id):raise ValueError('Saved download not found.')
+            finally:c.close()
+            roots=[]
+        else:
+            roots=payload.get('folders')
+            if not isinstance(roots,list) or not 1<=len(roots)<=20 or any(not isinstance(v,str) or not v.strip() or not Path(v.strip()).expanduser().is_absolute() for v in roots):
+                raise ValueError('Enter one full folder path per line (up to 20).')
+            roots=list(dict.fromkeys(str(Path(v.strip()).expanduser().absolute()) for v in roots))
+            review_id=None
+        import install_choices
+        model_types=payload.get('model_types')
+        if model_types is not None and (not isinstance(model_types,list) or not model_types or any(v not in install_choices.TYPES for v in model_types)):
+            raise ValueError('Select at least one valid model type, or use All types.')
+        record_ids=None
+        if payload.get('continue_job'):
+            previous=installed_recovery.status(str(payload['continue_job']),limit=1000000,include_current=True)
+            if previous['status']!='complete':raise ValueError('Finish the previous scan first.')
+            record_ids=[r['review_id'] for r in previous['results'] if r['status'] in {'missing','unavailable','unverified','multiple_matches'}]
+        job=installed_recovery.start(database.connect,roots,review_id,selected,find_copies=payload.get("find_copies") is True,auto_exact=payload.get("auto_exact") is True,forget_missing=False,busy_check=_installed_recovery_busy,model_types=model_types,record_ids=record_ids)
+        if not selected and payload.get('remember') is True:
+            settings=load_settings();settings.setdefault('preferences',{})['installed_scan_folders']=roots;save_settings(settings)
+        return {'success':True,'job_id':job}
+    except (ValueError,OSError) as exc:return {'success':False,'error':str(exc)},400
+
+
+@app.route('/api/installed-recovery/<job_id>',methods=['GET','DELETE'])
+def installed_recovery_status(job_id):
+    import installed_recovery
+    try:
+        if request.method=='DELETE':installed_recovery.cancel(job_id);return {'success':True}
+        offset=max(0,int(request.args.get('offset',0)))
+        return {'success':True,**installed_recovery.status(job_id,offset,include_current=request.args.get('include_current')=='1',include_missing=request.args.get('include_missing')=='1')}
+    except ValueError as exc:return {'success':False,'error':str(exc)},400
+
+
+@app.route('/api/installed-recovery/<job_id>/forget',methods=['POST'])
+def installed_recovery_forget(job_id):
+    import installed_recovery
+    payload=request.get_json(silent=True) or {}
+    ids=payload.get('review_ids')
+    if payload.get('confirm') is not True or not isinstance(ids,list) or not 1<=len(ids)<=100 or any(type(v) is not int for v in ids):
+        return {'success':False,'error':'Confirm 1–100 selected missing records.'},400
+    conn=database.connect();results=[]
+    try:
+        snapshot=installed_recovery.status(job_id,limit=1000000,include_current=True)
+        if snapshot['status']!='complete':raise ValueError('Complete the scan first.')
+        rows={r['review_id']:r for r in snapshot['results']}
+        with active_downloads._LOCK:
+            for ident in dict.fromkeys(ids):
+                try:
+                    row=rows.get(ident)
+                    if not row or row['status']!='missing':raise ValueError('Only unresolved missing files can be selected.')
+                    path=Path(row['old_path'])
+                    try:path.stat()
+                    except FileNotFoundError:pass
+                    else:raise ValueError('The recorded file reappeared. Scan again.')
+                    if not Path(path.anchor).exists():raise ValueError('Drive unavailable; record kept.')
+                    if _installed_recovery_busy(conn,ident,str(path)):raise ValueError('Scan or download active; record kept.')
+                    installed_recovery.forget_download(conn,ident,str(path))
+                    results.append({'review_id':ident,'success':True})
+                except (ValueError,OSError) as exc:results.append({'review_id':ident,'success':False,'error':str(exc)})
+        return {'success':True,'results':results}
+    except ValueError as exc:return {'success':False,'error':str(exc)},400
+    finally:conn.close()
+
+
+@app.route('/api/installed-recovery/<job_id>/automatic',methods=['GET'])
+def installed_recovery_automatic(job_id):
+    import installed_recovery
+    try:return {'success':True,'matches':installed_recovery.automatic_matches(job_id)}
+    except ValueError as exc:return {'success':False,'error':str(exc)},400
+
+
+@app.route('/api/installed-recovery/<job_id>/apply',methods=['POST'])
+def installed_recovery_apply(job_id):
+    import installed_recovery
+    payload=request.get_json(silent=True) or {}
+    selections=payload.get('selections') if isinstance(payload,dict) else None
+    if not isinstance(selections,list) or not 1<=len(selections)<=100:return {'success':False,'error':'Select 1–100 verified matches.'},400
+    results=[];conn=database.connect()
+    try:
+        with active_downloads._LOCK:
+            for selection in selections:
+                try:
+                    if not isinstance(selection,dict) or type(selection.get('review_id')) is not int or not isinstance(selection.get('path'),str):raise ValueError('Invalid file selection.')
+                    ident=selection['review_id'];path=selection['path']
+                    if _installed_recovery_busy(conn,ident,path):raise ValueError('Wait for the source scan to finish, or finish/dismiss downloads for this model, before changing its download records.')
+                    result=installed_recovery.relink(conn,job_id,ident,path,manual_confirm=selection.get('manual_confirm') is True)
+                    results.append({'review_id':ident,'success':True,**result})
+                except (ValueError,OSError,sqlite3.IntegrityError) as exc:
+                    installed_recovery.apply_error(job_id,selection.get('review_id') if isinstance(selection,dict) else None,str(exc))
+                    results.append({'review_id':selection.get('review_id') if isinstance(selection,dict) else None,'success':False,'error':str(exc)})
+        return {'success':True,'results':results}
+    finally:conn.close()
+
+
+@app.route('/api/downloaded-library/<int:ident>/uninstall',methods=['POST'])
+def installed_recovery_untrack(ident):
+    import installed_recovery
+    payload=request.get_json(silent=True)
+    if not isinstance(payload,dict) or payload.get('confirm') is not True or not isinstance(payload.get('path'),str):return {'success':False,'error':'Confirm the exact recorded path first.'},400
+    conn=database.connect()
+    try:
+        with active_downloads._LOCK:
+            if _installed_recovery_busy(conn,ident,payload['path']):raise ValueError('Wait for the source scan to finish, or finish/dismiss downloads for this model, before changing its download records.')
+            installed_recovery.mark_uninstalled(conn,ident,payload['path'])
+        return {'success':True}
+    except (ValueError,OSError) as exc:return {'success':False,'error':str(exc)},409
+    finally:conn.close()
+
+
+@app.route('/api/installed-recovery/picker',methods=['POST'])
+def installed_recovery_picker():
+    payload=request.get_json(silent=True) or {}
+    kind=payload.get('kind') if isinstance(payload,dict) else None
+    if kind not in {'file','folder'}:return {'success':False,'error':'Choose file or folder.'},400
+    if os.name!='nt':return {'success':False,'error':'Paste a full path on this platform. The Browse dialog is available on Windows.'},400
+    # Separate process: Tk must own its UI thread. Never interpolate user paths into code.
+    picker="import sys,json,tkinter as tk;from tkinter import filedialog;r=tk.Tk();r.withdraw();r.attributes('-topmost',True);p=filedialog.askdirectory(title='Choose model folder') if sys.argv[1]=='folder' else filedialog.askopenfilename(title='Locate installed model file');print(json.dumps({'path':p}));r.destroy()"
+    try:
+        import subprocess
+        result=subprocess.run([sys.executable,'-c',picker,kind],capture_output=True,text=True,timeout=180)
+        if result.returncode:raise ValueError('Folder picker unavailable. Paste the full path instead.')
+        return {'success':True,**json.loads(result.stdout)}
+    except (ValueError,OSError,subprocess.TimeoutExpired) as exc:return {'success':False,'error':str(exc)},400
+
+
+@app.delete("/api/downloaded-library/<int:ident>/orphan-review")
+def forget_orphan_review(ident):
+    conn = database.connect()
+    try:
+        with conn:
+            changed = conn.execute("""DELETE FROM download_reviews WHERE id=?
+                AND NOT EXISTS(SELECT 1 FROM installed_files WHERE review_id=?)""",(ident,ident)).rowcount
+        if not changed:
+            return {"success":False,"error":"Entry changed. Refresh the library."},409
+        return {"success":True}
+    finally:
+        conn.close()
+
+
+@app.route("/api/downloaded-library/<int:ident>/heart",methods=["PATCH"])
+def downloaded_file_heart(ident):
+    payload=request.get_json(silent=True)
+    if not isinstance(payload,dict) or type(payload.get('hearted')) is not bool:
+        return {'success':False,'error':'hearted must be true or false'},400
+    conn=database.connect()
+    try:
+        with conn:changed=conn.execute('UPDATE download_reviews SET hearted=? WHERE id=?',(int(payload['hearted']),ident)).rowcount
+        return ({'success':True,'hearted':payload['hearted']} if changed else ({'success':False,'error':'File record not found'},404))
+    finally:conn.close()
+
+
+@app.route("/api/downloaded-library/<int:ident>/local-file",methods=["GET","DELETE"])
+def downloaded_local_file(ident):
+    import local_file_management
+    prefs=load_settings().get('preferences',{})
+    comfy = prefs.get('local_comfy_root') or prefs.get('local_models_root') or prefs.get('comfyui_folder')
+    root = [installer.resolve_comfy_root(comfy)] if comfy else []
+    custom = Path(prefs.get('custom_library_root') or '').expanduser()
+    if custom.is_absolute():
+        root.append(custom)
+    conn=database.connect()
+    try:
+        with active_downloads._LOCK:
+            preview=local_file_management.plan(conn,ident,root)
+            for job in active_downloads.snapshot()['items']:
+                if job.get('status') in {'complete','canceled'}:continue
+                same_model=preview['model_id'] is not None and str(job.get('model_id'))==str(preview['model_id'])
+                part=str(job.get('part_path') or '')
+                same_folder=part and Path(part).parent==Path(preview['files'][0]['path']).parent
+                if same_model or same_folder:return {"success":False,"error":"Finish or dismiss downloads for this model before deleting its files."},409
+            if request.method=='GET':return {"success":True,**preview}
+            payload=request.get_json(silent=True) or {}
+            if not isinstance(payload,dict):raise ValueError('Invalid deletion request')
+            result=local_file_management.delete(conn,ident,root,payload.get('token'))
+            return result,(200 if result['success'] else 409)
+    except (ValueError,OSError) as exc:return {"success":False,"error":str(exc)},409
+    finally:conn.close()
+
+
+@app.post('/api/recorded-folder/<kind>/<int:ident>')
+def open_recorded_folder(kind,ident):
+    table={'review':'download_reviews','installed':'installed_files'}.get(kind)
+    if not table:return {'success':False,'error':'Unknown record type.'},404
+    conn=database.connect()
+    try:row=conn.execute(f'SELECT local_path FROM {table} WHERE id=?',(ident,)).fetchone()
+    finally:conn.close()
+    if not row or not row[0]:return {'success':False,'error':'No location recorded.'},404
+    path=Path(row[0])
+    try:
+        if not path.is_absolute() or not path.parent.is_dir():raise OSError('The recorded folder is unavailable.')
+        if path.is_file():subprocess.Popen(['explorer.exe','/select,',str(path)])
+        else:os.startfile(str(path.parent))
+    except OSError as exc:return {'success':False,'error':str(exc)},400
+    return {'success':True}
+
+@app.route('/api/downloaded-library/<int:ident>/location-status')
+def downloaded_location_status(ident):
+    conn=database.connect()
+    try:row=conn.execute('SELECT local_path FROM download_reviews WHERE id=?',(ident,)).fetchone()
+    finally:conn.close()
+    if not row:return {'success':False,'error':'Download record not found.'},404
+    path=Path(row['local_path'])
+    try:
+        import stat
+        state='available' if stat.S_ISREG(path.stat().st_mode) else 'missing'
+    except FileNotFoundError:state='missing' if Path(path.anchor).exists() else 'unavailable'
+    except OSError:state='unavailable'
+    return {'success':True,'state':state}
+
+@app.route("/api/downloaded-library")
+def downloaded_library():
+    import download_reviews
+    try:
+        offset=max(0,int(request.args.get("offset",0)))
+        conn=database.connect()
+        try:
+            result=download_reviews.listing(conn,request.args.get("state", ""),str(request.args.get("q", ""))[:200],offset)
+        finally:conn.close()
+        return {"success":True,**result}
+    except ValueError as exc:return {"success":False,"error":str(exc)},400
+
+
+@app.route("/api/downloaded-library/<int:ident>",methods=["PATCH"])
+def downloaded_library_update(ident):
+    import download_reviews
+    payload=request.get_json(silent=True) or {}
+    if not isinstance(payload,dict):return {"success":False,"error":"Invalid request"},400
+    conn=database.connect()
+    try:
+        with conn:
+            changed=download_reviews.update(conn,ident,payload.get("review_state"),payload.get("personal_tags"))
+        return ({"success":True} if changed else ({"success":False,"error":"File record not found"},404))
+    except ValueError as exc:return {"success":False,"error":str(exc)},400
+    finally:conn.close()
 
 
 @app.route("/api/download-history/recent")
@@ -4573,6 +5393,43 @@ def model_type_settings():
     )
 
 
+# V2 onboarding is tracked per installation, not per browser. A fresh folder
+# and an upgrade from any pre-v2 release both start without these markers.
+_ONBOARDING_EDITION = "v2"
+_ONBOARDING_GUIDES = frozenset(("setup", "library"))
+
+
+@app.route("/api/onboarding", methods=["GET", "POST"])
+def onboarding_state():
+    # Old browser localStorage keys must not suppress a guide on a new install.
+    if request.method == "POST":
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or payload.get("guide") not in _ONBOARDING_GUIDES:
+            return {"success": False, "error": "Unknown onboarding guide."}, 400
+        guide = payload["guide"]
+        # Serialize the read + write so simultaneous guide acknowledgments
+        # don't overwrite each other. The settings file remains user-owned.
+        from settings_manager import _SETTINGS_LOCK
+        with _SETTINGS_LOCK:
+            settings = load_settings()
+            state = settings.get("onboarding")
+            if not isinstance(state, dict):
+                state = {}
+                settings["onboarding"] = state
+            state[guide] = _ONBOARDING_EDITION
+            save_settings(settings)
+        return {"success": True}
+
+    state = load_settings().get("onboarding")
+    if not isinstance(state, dict):
+        state = {}
+    return {
+        "success": True,
+        "setup": state.get("setup") == _ONBOARDING_EDITION,
+        "library": state.get("library") == _ONBOARDING_EDITION,
+    }
+
+
 @app.route("/save_preferences", methods=["POST"])
 def save_preferences():
 
@@ -4601,14 +5458,68 @@ def save_preferences():
 
 
 
+@app.route("/api/model/<int:model_id>/delete-card", methods=["GET", "POST"])
+def delete_model_card_api(model_id):
+    from model_card_management import summary, delete_card
+    if request.method == "POST":
+        if request.headers.get("X-AbyssBeacon-Action") != "delete-card":
+            return {"success": False, "error": "Use Delete model card in the model details."}, 403
+        payload = request.get_json(silent=True) or {}
+        if payload.get("confirmed") is not True:
+            return {"success": False, "error": "Deletion was not confirmed."}, 400
+        if scan_status.scan_running:
+            return {"success": False, "error": "Wait for the current scan to finish before deleting this card."}, 409
+        jobs = active_downloads.snapshot().get("items", [])
+        if any(int(job.get("model_id") or 0) == model_id and job.get("status") not in {"complete", "canceled"} for job in jobs):
+            return {"success": False, "error": "This card has an unfinished download. Finish or remove its Download Manager entry first."}, 409
+    conn = database.connect()
+    try:
+        if request.method == "GET":
+            result = summary(conn, model_id)
+            if result is None:
+                return {"success": False, "error": "Model card not found."}, 404
+            return {"success": True, "card": result}
+        deleted = delete_card(conn, model_id, str(payload.get("identity") or ""))
+        has_local_models = bool(conn.execute("SELECT 1 FROM models WHERE source='local' LIMIT 1").fetchone())
+    except LookupError as exc:
+        return {"success": False, "error": str(exc)}, 404
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}, 409
+    except sqlite3.Error:
+        return {"success": False, "error": "The database is busy or deletion failed. The card was not deleted; try again."}, 409
+    finally:
+        conn.close()
+    for job in jobs:
+        if int(job.get("model_id") or 0) == model_id and job.get("status") in {"complete", "canceled"}:
+            active_downloads.dismiss(job["id"])
+    return {"success": True, "deleted": model_id, "has_local_models":has_local_models, "message": f"Deleted model card: {deleted['name']}. Downloaded files were kept."}
+
+
 @app.route("/models/mark-seen", methods=["POST"])
 def mark_models_seen():
     payload = request.get_json(silent=True) or {}
-    if payload.get("all"):
-        changed = database.mark_all_viewed()
-    else:
-        changed = database.mark_models_viewed(payload.get("ids", []))
-    return {"success": True, "changed": changed}
+    if not isinstance(payload, dict) or ("ids" in payload and not isinstance(payload["ids"], list)):
+        return {"success": False, "error": "Invalid Mark seen request."}, 400
+    scope = payload.get("scope")
+    names = architecture_seen.selection(payload.get("architectures"))
+    if scope == "architectures":
+        configured = load_architectures()
+        if not names or any(name not in configured and name != "Other" for name in names):
+            return {"success": False, "error": "Choose valid architectures first."}, 400
+    elif scope == "library" or payload.get("all"):
+        names = []
+    elif scope is not None:
+        return {"success": False, "error": "Invalid Mark seen scope."}, 400
+    conn = database.connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE" if not payload.get("preview") else "BEGIN")
+        result = architecture_seen.mark(conn, names,
+            ids=payload.get("ids", []) if scope is None and not payload.get("all") else None,
+            preview=bool(payload.get("preview")))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"success": True, **result, "scope": scope or "ids", "architectures": names}
 
 
 @app.route("/scan/history")
@@ -4686,7 +5597,8 @@ def scan():
         "selected_scan_sources": selected_sources,
         "scan_architectures": selected_architectures,
         "selected_architecture": selected_architecture,
-        "scan_model_types": requested_types
+        "scan_model_types": requested_types,
+        "clear_seen_before_scan": request.form.get("clear_seen_before_scan") == "1"
 
     })
 
@@ -4713,6 +5625,13 @@ def scan():
         )
 
         try:
+            if settings["preferences"].get("clear_seen_before_scan"):
+                clear_conn = database.connect()
+                try:
+                    with clear_conn:
+                        architecture_seen.mark(clear_conn, selected_architectures)
+                finally:
+                    clear_conn.close()
 
             scanner_runner.run_scan(
                 selected_sources=selected_sources,
@@ -5400,6 +6319,22 @@ def _classify_detected_architectures(values):
     return searchable, detected
 
 
+def _new_notification_scope(architecture=None, preferences=None):
+    """Presentation scope only: never clears hidden architecture states."""
+    explicit = architecture_seen.selection(architecture)
+    if explicit:
+        names = explicit
+    else:
+        preferences = preferences if preferences is not None else load_settings().get("preferences", {})
+        names = preferences.get("enabled_architectures")
+        if not isinstance(names, list):
+            names = preferences.get("scan_architectures")
+        if not isinstance(names, list):
+            names = list(load_architectures())
+    # An empty enabled list must match nothing, rather than mean all states.
+    return [name for name in names if str(name).casefold() != "other"] or ["__no_enabled_architectures__"]
+
+
 def _popularity_order(conn, field, architecture, selected_sources, preferences):
     """Rank source-owned counts in SQLite before LIMIT/OFFSET, with bounded work."""
     from source_metrics import rank_value
@@ -5514,10 +6449,10 @@ def _feed_window_base_query(
         params.extend(selected_sources)
         params.extend(selected_sources)
 
-    if str(status or "all").lower() == "new":
-        conditions.append("viewed = 0")
-    elif str(status or "all").lower() == "seen":
-        conditions.append("viewed = 1")
+    if str(status or "all").lower() in {"new", "seen"}:
+        state_sql, state_params = architecture_seen.new_condition(_new_notification_scope(architecture))
+        conditions.append(state_sql if str(status).lower() == "new" else "NOT " + state_sql)
+        params.extend(state_params)
     elif str(status or "all").lower() == "updated":
         try:
             latest = database.get_scan_history(1)
@@ -5550,7 +6485,7 @@ def _feed_window_base_query(
 
     download_status = str(download_status or "all").strip().lower()
     if download_status == "downloaded":
-        conditions.append("EXISTS (SELECT 1 FROM download_history dh WHERE dh.model_id = models.id)")
+        conditions.append("(EXISTS (SELECT 1 FROM download_history dh WHERE dh.model_id = models.id) OR EXISTS (SELECT 1 FROM installed_files i WHERE i.model_id = models.id))")
     elif download_status == "updates":
         update_ids = sorted(_update_available_model_ids())
         if update_ids:
@@ -5560,7 +6495,7 @@ def _feed_window_base_query(
         else:
             conditions.append("1=0")
     elif download_status == "not_downloaded":
-        conditions.append("NOT EXISTS (SELECT 1 FROM download_history dh WHERE dh.model_id = models.id)")
+        conditions.append("(NOT EXISTS (SELECT 1 FROM download_history dh WHERE dh.model_id = models.id) AND NOT EXISTS (SELECT 1 FROM installed_files i WHERE i.model_id = models.id))")
 
     # Plain Search belongs in SQLite, before LIMIT/OFFSET.  The old behavior
     # loaded the newest feed slice first and then hid non-matches in JavaScript,
@@ -5707,6 +6642,11 @@ def _prepare_feed_chunk_models(
         for name, data in sources.items()
     }
     default_color = "#00eaff"
+    # Resolve local source credentials once per batch, not for every card.
+    civitai_auth_configured = {
+        source: _civitai_download_token_available(source)
+        for source in ("civitai", "civitaired")
+    }
 
     for model in models:
         mid = int(model["id"])
@@ -5977,6 +6917,30 @@ def _prepare_feed_chunk_models(
             preferences,
             active_snapshots,
         )
+        card_metadata = presentation.get("card_data") if isinstance(presentation.get("card_data"), dict) else {}
+        card_version_id = str(card_metadata.get("version_id") or "").strip()
+        if not card_version_id:
+            card_versions = card_metadata.get("versions") or []
+            if isinstance(card_versions, list):
+                card_version_id = str(next((v.get("id") for v in card_versions if isinstance(v, dict) and v.get("id")), "") or "")
+        model["civitai_auth_version_id"] = card_version_id if presentation_source == "civitai" and card_version_id.isdigit() else ""
+        if model["civitai_auth_version_id"] and not civitai_auth_configured.get("civitai", False):
+            mini_auth = cached_require_auth(model["civitai_auth_version_id"])
+            if mini_auth is not None:
+                card_metadata = dict(card_metadata)
+                card_metadata["version_id"] = model["civitai_auth_version_id"]
+                card_versions = list(card_metadata.get("versions") or [])
+                if card_versions:
+                    card_versions = [dict(v, require_auth=mini_auth) if isinstance(v,dict) and str(v.get("id")) == model["civitai_auth_version_id"] else v for v in card_versions]
+                else:
+                    card_versions = [{"id":model["civitai_auth_version_id"],"require_auth":mini_auth}]
+                card_metadata["versions"] = card_versions
+        model["civitai_signin_hint"] = current_model_signin_hint(
+            presentation_source,
+            card_metadata,
+            civitai_auth_configured.get(presentation_source, False),
+            model.get("access_status"),
+        )
         model["source_color"] = source_themes.get(presentation_source, {}).get("color", default_color)
 
         # A family favorite should make its parent Collection discoverable in
@@ -5985,6 +6949,16 @@ def _prepare_feed_chunk_models(
         model["has_family_favorite"] = mid in family_favorite_model_ids
         model["effective_favorite"] = bool(model.get("favorite")) or model["has_family_favorite"]
 
+    state_conn = database.connect()
+    try:
+        notification_scope = _new_notification_scope(request.args.get("architecture", ""), preferences)
+        architecture_seen.annotate(state_conn, models, notification_scope)
+        badge_scope = {name.casefold() for name in _new_notification_scope(None, preferences) + notification_scope}
+        for model in models:
+            model["notification_architectures"] = notification_scope
+            model["new_architectures"] = [name for name in model.get("new_architectures", []) if name.casefold() in badge_scope]
+    finally:
+        state_conn.close()
     return models
 
 
@@ -6104,18 +7078,10 @@ def home():
 
     # STATUS FILTER
 
-    if status == "new":
-
-        conditions.append(
-            "viewed = 0"
-        )
-
-
-    elif status == "seen":
-
-        conditions.append(
-            "viewed = 1"
-        )
+    if status in {"new", "seen"}:
+        state_sql, state_params = architecture_seen.new_condition(_new_notification_scope(architecture))
+        conditions.append(state_sql if status == "new" else "NOT " + state_sql)
+        params.extend(state_params)
 
     elif status == "updated":
         try:
@@ -6155,15 +7121,17 @@ def home():
 
     # The navbar count remains the true result count even though only a small
     # first card window is prepared/rendered.
+    has_local_models = conn.execute("SELECT 1 FROM models WHERE source='local' LIMIT 1").fetchone() is not None
     _feed_count_query = query
     _feed_count_params = list(params)
     _feed_total_count = int(conn.execute(
         f"SELECT COUNT(*) FROM ({_feed_count_query}) AS feed_count",
         _feed_count_params,
     ).fetchone()[0])
+    _new_state_sql, _new_state_params = architecture_seen.new_condition(_new_notification_scope(architecture), "feed_count")
     _feed_total_new = int(conn.execute(
-        f"SELECT COUNT(*) FROM ({_feed_count_query}) AS feed_count WHERE viewed = 0",
-        _feed_count_params,
+        f"SELECT COUNT(*) FROM ({_feed_count_query}) AS feed_count WHERE {_new_state_sql}",
+        _feed_count_params + _new_state_params,
     ).fetchone()[0])
 
     # SORTING
@@ -6608,6 +7576,7 @@ def home():
 
         selected_sort=sort,
 
+        has_local_models=has_local_models,
         sources=enabled_sources_for_ui,
         discovery_sources=dict(sorted(
             (
@@ -8083,13 +9052,14 @@ def collection_page(model_id):
         model_id,
         [group.get("family_id") for group in groups],
     )
-    downloaded_fingerprints = {
-        str(row.get("file_fingerprint") or "")
-        for row in database.get_download_history_for_model(model_id)
-        if str(row.get("source") or "").strip().casefold() == source.casefold()
-        and str(row.get("model_key") or "").strip().casefold() == model_key.casefold()
-        and str(row.get("file_fingerprint") or "")
-    }
+    import install_choices
+    installs = [row for row in database.get_installed_files_for_model(model_id)
+                if row["source"] == source and row["model_key"] == model_key]
+    history_paths = {row["file_fingerprint"]: row["file_key"] for row in database.get_download_history_for_model(model_id)
+                     if row["source"] == source and row["model_key"] == model_key and row["file_fingerprint"]}
+    downloaded_fingerprints = set(history_paths)
+    families_by_fp = {}
+    families_by_path = {}
     downloaded_paths = set()
     if downloaded_fingerprints:
         for group in groups:
@@ -8118,12 +9088,34 @@ def collection_page(model_id):
         group["size_display"] = _format_download_size({"size_bytes": group.get("total_size_bytes", 0)}, source)
         for file_data in group.get("files", []):
             file_data["size_display"] = _format_download_size(file_data, source)
+            original = files[file_data["_download_index"]]
+            fingerprint = _download_file_fingerprint(collection_snapshot, original)
+            families_by_fp[fingerprint] = group
+            families_by_path.setdefault(_download_file_key(original), set()).add(family_id)
+            file_data["installed"] = next((row for row in installs if row["file_fingerprint"] == fingerprint), None)
+            file_data["suggested_type"] = next((key for key, label in install_choices.TYPES.items()
+                                                if label.casefold() == str(group.get("artifact_type")).casefold()), "")
             file_data["download_url"] = url_for(
                 "tracked_source_download",
                 model_id=model_id,
                 source=source,
                 file_index=int(file_data.get("_download_index", 0)),
             )
+
+    groups_by_id = {group["family_id"]: group for group in groups}
+    unmatched_installs = []
+    for row in installs:
+        fingerprint = row["file_fingerprint"]
+        group = families_by_fp.get(fingerprint)
+        row["matches_current"] = group is not None
+        if group is None:
+            candidates = families_by_path.get(history_paths.get(fingerprint), set())
+            if len(candidates) == 1:
+                group = groups_by_id[next(iter(candidates))]
+        if group is None:
+            unmatched_installs.append(row)
+        else:
+            group.setdefault("installed_rows", []).append(row)
 
     # Preserve access to the complete repository, not just the model weights
     # promoted into Collection families. This restores preview/config/README
@@ -8484,9 +9476,16 @@ def collection_page(model_id):
             path=readme["path"], source=readme["source"],
         )
 
+    from collection_paging import paginate_collection
+    paging = paginate_collection(groups, repository_files, request.args)
     return render_template(
         "collection.html",
+        **paging,
+
         collection_readmes=readmes,
+        unmatched_installs=unmatched_installs,
+        repository_favorite=canonical.get("favorite"),
+        install_types=install_choices.TYPES,
         model_id=model_id,
         title=title,
         author=author,
@@ -8502,8 +9501,8 @@ def collection_page(model_id):
         family_count=len(groups),
         collection_family_type=collection_family_type,
         collection_change_summary=collection_change_summary,
-        groups=groups,
-        repository_files=repository_files,
+        groups=paging["page_groups"],
+        repository_files=paging["page_repository_files"],
         repository_extra_file_count=len(repository_files),
         media=media,
         media_page=media[:10],
@@ -9916,6 +10915,27 @@ def _has_rich_generation_metadata(meta):
     return any(meta.get(key) not in (None, "", [], {}) for key in strong)
 
 
+@app.get("/api/model/<int:model_id>/civitai-version/<int:version_id>/gallery")
+def civitai_version_gallery(model_id, version_id):
+    from scanners import civitai
+    keys = {str(link["model_key"]) for link in database.get_model_sources(model_id)
+            if link["source"] == "civitai"}
+    if not keys:
+        return {"ok": False}, 404
+    version = civitai._fetch_model_version(version_id)
+    if str(version.get("id")) != str(version_id) or str(version.get("modelId")) not in keys:
+        return {"ok": False}, 404
+    include_mature = _civitai_include_mature_media_enabled()
+    mode = _normalize_maturity_mode(load_settings().get("preferences", {}).get("selected_sensitive", "hide"))
+    rows = civitai._media_records([version], include_mature_media=include_mature)
+    media = []
+    for row in rows:
+        row["source"] = "civitai"
+        if _media_visible_for_maturity(row, mode, include_civitai_mature_media=include_mature):
+            media.append(row)
+    return {"ok": True, "media": media}
+
+
 @app.route("/api/model/<int:model_id>/version/<version_id>/media-metadata", methods=["GET"])
 def lazy_red_version_media_metadata(model_id, version_id):
     """Resolve and cache the selected CivitAI Red version's own gallery."""
@@ -10202,6 +11222,7 @@ def model_details(id):
         for name, data in detail_settings.get("sources", {}).items()
     }
 
+    source_colors["local"]="#B8C6E0"
     raw_source_links = [dict(row) for row in database.get_model_sources(id)]
     raw_media_rows = [dict(row) for row in database.get_media(id)]
     source_snapshots = []
@@ -10288,13 +11309,17 @@ def model_details(id):
     ]
 
     # Installed-file records survive page reloads. Match them by source +
-    # fingerprint so the path automatically disappears when the upstream file
-    # changes and an update becomes available.
+    # fingerprint, or the explicit identity saved by local imports. Existing
+    # imports retain their paths without rewriting records or probing disks.
     installed_rows = conn.execute(
         """
-        SELECT source, model_key, source_file_id, file_fingerprint,
-               local_path, filename, version_id, version_name, installed_at
-        FROM installed_files
+        SELECT i.id AS installed_id, i.source, i.model_key, i.source_file_id, i.file_fingerprint,
+               i.local_path, i.filename, i.version_id, i.version_name, i.installed_at,
+               (SELECT r.verified_sha256 FROM download_reviews r
+                WHERE r.id=i.review_id LIMIT 1) AS verified_sha256,
+               (SELECT r.imported_at FROM download_reviews r
+                WHERE r.id=i.review_id LIMIT 1) AS imported_at
+        FROM installed_files i
         WHERE model_id=?
         ORDER BY installed_at DESC, id DESC
         """,
@@ -10302,6 +11327,8 @@ def model_details(id):
     ).fetchall()
     installed_rows = [dict(row) for row in installed_rows]
 
+    model["installed_locations"]=installed_rows
+    model["page_links_only"]=bool(installed_rows) and all(r["imported_at"] and not any(r[k] for k in ("source_file_id","version_id","file_fingerprint")) for r in installed_rows)
     # Build source-specific choices. Alternate sources get full download metadata
     # after they have been scanned once with this version of AbyssBeacon.
     model["download_sources"] = []
@@ -10315,6 +11342,10 @@ def model_details(id):
             src["access_status"] = "downloadable"
         src["metadata_ready"] = bool(src_files)
         src["versions"] = _source_version_groups(src)
+        token_available = _civitai_download_token_available(src.get("source"))
+        for version in src["versions"]:
+            version["signin_hint"] = version_signin_hint(src.get("source"), version, token_available)
+        src["signin_hint"] = src["versions"][0]["signin_hint"] if src["versions"] else ""
 
         installed_for_source = [
             row for row in installed_rows
@@ -10325,15 +11356,13 @@ def model_details(id):
                 if not isinstance(file_data, dict):
                     continue
                 fingerprint = _download_file_fingerprint(src, file_data)
-                match = next(
-                    (
-                        row for row in installed_for_source
-                        if fingerprint
-                        and str(row.get("file_fingerprint") or "") == fingerprint
-                    ),
-                    None,
+                from installed_identity import match_installed_file
+                match = match_installed_file(
+                    src, file_data, installed_for_source, fingerprint,
+                    _download_file_sha256(file_data), version.get("id"),
                 )
                 if match:
+                    file_data["_installed_id"]=match["installed_id"]
                     file_data["_installed_path"] = str(match.get("local_path") or "")
                     file_data["_installed_at"] = str(match.get("installed_at") or "")
 
@@ -10608,31 +11637,10 @@ def model_details(id):
             int(meta.get("rank", 999999)) if meta else 999999,
         )
 
-    # Browser-download history may exist without a local installed_files row.
-    for row in history_for_model:
-        fp = str(row.get("file_fingerprint") or "").strip()
-        file_id = str(row.get("source_file_id") or "").strip()
-        source_name = str(row.get("source") or "").strip().lower()
-        row_version_id = str(row.get("version_id") or "").strip()
-        row_version_name = str(row.get("version_name") or "").strip()
-        meta = (
-            version_lookup_by_id.get((source_name, row_version_id))
-            if row_version_id else None
-        ) or (
-            version_lookup_by_name.get((source_name, row_version_name.casefold()))
-            if row_version_name else None
-        ) or version_lookup_by_fp.get((source_name, fp)) \
-          or version_lookup_by_file_id.get((source_name, file_id))
-
-        _remember_installed_version(
-            source_name,
-            row_version_id or (meta.get("id") if meta else ""),
-            row_version_name or (meta.get("name") if meta else ""),
-            row.get("downloaded_at"),
-            row.get("filename"),
-            "",
-            int(meta.get("rank", 999999)) if meta else 999999,
-        )
+    model["browser_download_requested"] = bool(history_for_model) and not installed_rows
+    if model["browser_download_requested"]:
+        model["downloaded"] = False
+        model["update_available"] = False
 
     # Prefer a version the source itself ranks newest; use installation time as
     # the tie-breaker. Unknown historical versions fall behind known versions.

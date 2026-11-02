@@ -46,6 +46,9 @@
 .bulk-action{border:0;background:transparent;color:#00d9ff;font:inherit;font-size:13px;cursor:pointer;padding:4px 2px}
 .bulk-action:hover{text-decoration:underline}
 .bulk-sep{color:#526274;font-size:12px}
+
+.page{width:min(1200px,calc(100% - 32px));margin:14px auto 24px}.subtitle{margin:0 0 10px;font-size:14px}.notice{font-size:12px;margin-bottom:12px}.model-row,.family-head{padding:10px 12px}.choice span{font-size:15px}.models{gap:9px}.scan-footer{position:sticky;bottom:0;background:#080b10;padding:12px 0;margin-top:14px}
+@media(min-width:950px){.models{grid-template-columns:repeat(3,minmax(0,1fr))}}
 </style>
 
 </head>
@@ -59,7 +62,7 @@
 </div>
 <div class="sources">
 {% for name, source in sources.items() %}
-<div class="source-row"><label class="choice"><input class="source-check" type="checkbox" value="{{ name }}" {% if name in enabled_sources %}checked{% endif %}><span>{{ source.display }}</span></label></div>
+<div class="source-row"><label class="choice"><input class="source-check" type="checkbox" value="{{ name }}" {% if name in enabled_sources %}checked{% endif %}><span>{{ source.display }}</span></label>{% if name in ["seaart","civitaired"] %}<small>Connect in Source Accounts to scan this source.</small>{% elif name=="civitai" %}<small>Connect for broader discovery. Limited scanning is available before connecting.</small>{% endif %}</div>
 {% endfor %}
 </div>
     <div class="scan-footer">

@@ -2,7 +2,7 @@
     data-model-id="{{ model['id'] }}"
     data-source="{{ model['source'] }}"
     data-sensitive="{{ 'true' if model.get('sensitive') else 'false' }}"
-    style="--source-color: {{ model['source_color'] }}"
+    style="--source-color: {{ '#B8C6E0' if model['source']=='local' else model['source_color'] }}"
 >
 
 <div class="detail-floating-nav" aria-label="Model navigation">
@@ -36,9 +36,11 @@
             >{{ '★' if model['favorite'] else '☆' }}</button>
 
             {% set source_labels = {'huggingface':'Hugging Face','modelscope':'ModelScope','civitai':'CivitAI','civitaired':'CivitAI Red','tensorhub':'TensorHub Art','seaart':'SeaArt'} %}
+            {% if model['source']=='local' %}<span class="source-btn" style="--button-source-color:#B8C6E0">Local</span>{% else %}
             <a class="source-btn source-{{ model['source'] }}" data-source="{{ model['source'] }}" href="{{ model['url'] }}" target="_blank" style="--button-source-color: {{ source_colors.get(model['source'], model['source_color']) }}">
                 {{ source_labels.get(model['source'], model['source']|capitalize) }}
             </a>
+            {% endif %}
             {% for link in model.get('source_links', []) %}
                 {% if link['source'] != model['source'] and link['url'] %}
                 <a class="source-btn source-fallback-btn source-{{ link['source'] }}" data-source="{{ link['source'] }}" href="{{ link['url'] }}" target="_blank" title="Alternate source for the same model" style="--button-source-color: {{ source_colors.get(link['source'], '#00eaff') }}">
@@ -47,10 +49,11 @@
                 {% endif %}
             {% endfor %}
 
+    <button id="closeModel" class="close-model" type="button" aria-label="Close model">×</button>
         </div>
     </div>
 
-    <button id="closeModel" class="close-model" type="button" aria-label="Close model">×</button>
+
 
     <div class="detail-version-nav">
         {% if model.get('version_choices') %}
@@ -94,8 +97,9 @@
             <div class="download-header-title">
                 <h3>Download</h3>
                 <span class="download-model-name">{{ model['display_name'] or model['name'] }}</span>
-                {% if model.get('download_status') == 'downloaded' %}
-                <span class="download-version-state current">✓ Current version downloaded</span>
+                {% if model.get('browser_download_requested') %}<span class="download-version-state">Sent to browser</span>
+                {% elif model.get('download_status') == 'downloaded' %}
+                <span class="download-version-state current">✓ {{ 'Local file linked to model' if model.get('page_links_only') else 'Current version downloaded' }}</span>
                 {% elif model.get('download_status') == 'update' %}
                 <div class="download-update-line">
                     <span class="download-version-state update">↻ Update available</span>
@@ -120,20 +124,24 @@
             </div>
         </div>
 
-        {% if model.get('installed_version_count', 0) > 1 %}
+        {% if model.get('browser_download_requested') %}<p class="browser-download-guidance">Sent to your browser for download. <a href="/downloaded?add=1">Link the saved file to your library</a>.</p>{% endif %}
+        {% set locations = model.get('installed_locations', []) %}
+        {% set versions = model.get('installed_versions', []) %}
+        {% if locations or versions %}
         <details class="installed-versions-panel">
-            <summary>Installed versions ({{ model.get('installed_version_count') }})</summary>
+            <summary>{% if locations|length == 1 and versions|length <= 1 %}Installed file (1){% else %}Installed versions ({{ versions|length }}){% endif %}</summary>
             <div class="installed-versions-list">
-                {% for installed in model.get('installed_versions', []) %}
-                <div class="installed-version-row">
-                    <div>
-                        <strong>{{ installed.get('name') }}</strong>
-                        {% if loop.first %}<span class="installed-version-newest">Newest installed</span>{% endif %}
-                    </div>
-                    {% if installed.get('filename') and installed.get('filename') != installed.get('name') %}
-                    <span>{{ installed.get('filename') }}</span>
-                    {% endif %}
-                </div>
+                {% for location in locations %}
+                {% set version = versions|selectattr('local_path','equalto',location.local_path)|first %}
+                <div class="installed-version-row"><div>
+                    <strong>{{ location.version_name or (version.name if version else '') }}</strong>
+                    {% if loop.first %}<span class="installed-version-newest">Newest installed</span>{% endif %}
+                    <div><button type="button" class="recorded-path-button" data-open-record="installed/{{ location.installed_id }}" title="Show file in folder">{{ location.filename }}</button></div>
+                    <small style="overflow-wrap:anywhere">{{ (location.local_path or '').removesuffix(location.filename or '') }}</small>
+                </div></div>
+                {% endfor %}
+                {% for version in versions if version.local_path not in locations|map(attribute='local_path') %}
+                <div class="installed-version-row"><strong>{{ version.name }}</strong><span>{{ version.filename }}</span></div>
                 {% endfor %}
             </div>
         </details>
@@ -155,7 +163,9 @@
                 {% set tensorhub_paid_versions = src.get('versions', []) | selectattr('access_status', 'equalto', 'paid_access') | list if src.get('source') == 'tensorhub' else [] %}
                 <div class="download-source-heading">
                     <strong>{{ source_labels.get(src.get('source'), src.get('source')|capitalize) }}</strong>
-                    {% if src.get('access_status') == 'downloadable' %}<span class="download-source-state downloadable">↓ Downloadable</span>
+                    {% if src.get('access_status') == 'downloadable' and src.get('signin_hint') == 'required' %}<span class="download-source-state signin-required" title="CivitAI reports that this version requires sign-in"><svg class="auth-login-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/><path d="M12 3h6a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3h-6"/></svg> Sign-in required</span>
+                    {% elif src.get('access_status') == 'downloadable' and src.get('signin_hint') == 'possible' %}<span class="download-source-state signin-possible" title="CivitAI has not confirmed anonymous download access">? Sign-in may be required</span>
+                    {% elif src.get('access_status') == 'downloadable' %}<span class="download-source-state downloadable">↓ Downloadable</span>
                     {% elif src.get('access_status') == 'early_access' %}<span class="download-source-state early-access">⚡ Early Access</span>
                     {% elif src.get('access_status') == 'paid_access' or tensorhub_paid_versions|length %}<span class="download-source-state paid-access">$ Paid Access</span>
                     {% elif src.get('access_status') == 'gated' %}<span class="download-source-state gated">🔒 Restricted</span>
@@ -198,6 +208,11 @@
                                 {% if version.get('base_model_type') %}<span class="download-version-subtype">{{ version.get('base_model_type') }}</span>{% endif %}
                             </div>
                         </div>
+                        {% if version.get('signin_hint') == 'required' %}
+                        <p class="download-signin-note required">Sign-in required for this version. Connect the source account in AbyssBeacon, or open the model on CivitAI to download in your browser.</p>
+                        {% elif version.get('signin_hint') == 'possible' %}
+                        <p class="download-signin-note possible">? Sign-in may be required. CivitAI has not confirmed anonymous download access for this version; you can try downloading without connecting an account.</p>
+                        {% endif %}
                         {% if version.get('access_status') == 'early_access' %}
                         <div class="download-early-access-note">
                             <span>
@@ -214,7 +229,7 @@
                                     data-version-id="{{ version.get('id') or '' }}"
                                     data-version-name="{{ version.get('name') or '' }}"
                                     data-release-at="{{ version.get('early_access_deadline') or '' }}">
-                                {% if queue_key in model.get('queued_download_keys', []) %}✓ Waiting in queue{% else %}Download when available{% endif %}
+                                {% if queue_key in model.get('queued_download_keys', []) %}Remove from queue{% else %}Download when available{% endif %}
                             </button>
                             {% endif %}
                         </div>
@@ -225,13 +240,17 @@
                             <div class="download-file"
                                  data-download-primary="true">
                                 <div class="download-file-info">
-                                    <strong>{% if file.get('fp') %}{{ file.get('fp') }} · {% endif %}{{ file.get('name') or file.get('path') or 'Model file' }}</strong>
+                                    <strong>{{ file.get('_download_name') or file.get('name') or file.get('path') or 'Model file' }}</strong>
+                                    {% if file.get('_download_path') %}<span class="download-original-path">{{ file.get('_download_path') }}</span>{% endif %}
                                     <span>
-                                        {{ file.get('_download_kind') or file.get('format') or 'File' }}
+                                        {% if file.get('_download_purpose') %}{{ file.get('_download_purpose') }} · {% endif %}{{ file.get('_download_format') or file.get('_download_kind') or 'File' }}
+                                            {% if file.get('_download_precision') %} · {{ file.get('_download_precision') }}{% endif %}
+                                            {% if file.get('_download_relationship') %} · {{ file.get('_download_relationship') }}{% endif %}
+                                            {% if file.get('_download_file_id') %} · File #{{ file.get('_download_file_id') }}{% endif %}
                                         {% if file.get('size_display') %} · {{ file.get('size_display') }}{% endif %}
                                     </span>
                                     {% if file.get('_installed_path') %}
-                                    <span class="download-installed-path">Installed → {{ file.get('_installed_path') }}</span>
+                                    <button type="button" class="download-installed-path recorded-path-button" data-open-record="installed/{{ file.get('_installed_id') }}">Installed → {{ file.get('_installed_path') }}</button>
                                     {% endif %}
                                 </div>
                                 {% if file.get('_download_directory') %}
@@ -251,10 +270,10 @@
                                         data-file-name="{{ watch_file_name }}"
                                         data-file-index="{{ file.get('_download_index', -1) }}"
                                         title="Watch this exact paid file and notify me if it becomes downloadable">
-                                    {% if watch_key in model.get('watched_download_keys', []) %}✓ Watching{% else %}Watch{% endif %}
+                                    {% if watch_key in model.get('watched_download_keys', []) %}Remove from watchlist{% else %}Watch{% endif %}
                                 </button>
                                 {% elif ((version.get('access_status') in ['downloadable', 'gated'] or (version.get('access_status') == 'paid_access' and src.get('source') not in ['civitai','civitaired'])) or (src.get('source') == 'tensorhub' and version.get('access_status') == 'unconfirmed')) and (file.get('download_url') or file.get('model_file_id') or file.get('model_ver_no') or src.get('source') == 'huggingface') %}
-                                <a class="file-download-btn" href="/download/source/{{ model['id'] }}/{{ src.get('source') }}/{{ file.get('_download_index', loop.index0) }}" target="_blank" rel="noopener" title="{% if version.get('access_status') == 'paid_access' %}Download if your account has purchased access on {{ source_labels.get(src.get('source'), src.get('source')) }}{% elif version.get('access_status') == 'gated' %}Try restricted download from {{ source_labels.get(src.get('source'), src.get('source')) }}{% elif src.get('source') == 'tensorhub' and version.get('access_status') == 'unconfirmed' %}Try TensorHub download{% else %}Download from {{ source_labels.get(src.get('source'), src.get('source')) }}{% endif %}">↓</a>
+                                <a class="file-download-btn" href="/download/source/{{ model['id'] }}/{{ src.get('source') }}/{{ file.get('_download_index', loop.index0) }}" target="_blank" rel="noopener" title="{% if file.get('_installed_path') %}Installed: {{ file.get('_installed_path') }} — click to download again{% elif version.get('access_status') == 'paid_access' %}Download if your account has purchased access on {{ source_labels.get(src.get('source'), src.get('source')) }}{% elif version.get('access_status') == 'gated' %}Try restricted download from {{ source_labels.get(src.get('source'), src.get('source')) }}{% elif src.get('source') == 'tensorhub' and version.get('access_status') == 'unconfirmed' %}Try TensorHub download{% else %}Download from {{ source_labels.get(src.get('source'), src.get('source')) }}{% endif %}">{{ "✓" if file.get("_installed_path") else "↓" }}</a>
                                 {% else %}<span class="file-download-btn disabled" title="Direct download is currently unavailable">×</span>{% endif %}
                             </div>
                             {% endif %}
@@ -272,13 +291,17 @@
                                      data-download-primary="false"
                                      hidden>
                                     <div class="download-file-info">
-                                        <strong>{% if file.get('fp') %}{{ file.get('fp') }} · {% endif %}{{ file.get('name') or file.get('path') or 'Model file' }}</strong>
+                                        <strong>{{ file.get('_download_name') or file.get('name') or file.get('path') or 'Model file' }}</strong>
+                                    {% if file.get('_download_path') %}<span class="download-original-path">{{ file.get('_download_path') }}</span>{% endif %}
                                         <span>
-                                            {{ file.get('_download_kind') or file.get('format') or 'File' }}
+                                            {% if file.get('_download_purpose') %}{{ file.get('_download_purpose') }} · {% endif %}{{ file.get('_download_format') or file.get('_download_kind') or 'File' }}
+                                            {% if file.get('_download_precision') %} · {{ file.get('_download_precision') }}{% endif %}
+                                            {% if file.get('_download_relationship') %} · {{ file.get('_download_relationship') }}{% endif %}
+                                            {% if file.get('_download_file_id') %} · File #{{ file.get('_download_file_id') }}{% endif %}
                                             {% if file.get('size_display') %} · {{ file.get('size_display') }}{% endif %}
                                         </span>
                                         {% if file.get('_installed_path') %}
-                                        <span class="download-installed-path">Installed → {{ file.get('_installed_path') }}</span>
+                                        <button type="button" class="download-installed-path recorded-path-button" data-open-record="installed/{{ file.get('_installed_id') }}">Installed → {{ file.get('_installed_path') }}</button>
                                         {% endif %}
                                     </div>
                                     {% if file.get('_download_directory') %}
@@ -298,10 +321,10 @@
                                             data-file-name="{{ watch_file_name }}"
                                             data-file-index="{{ file.get('_download_index', -1) }}"
                                             title="Watch this exact paid file and notify me if it becomes downloadable">
-                                        {% if watch_key in model.get('watched_download_keys', []) %}✓ Watching{% else %}Watch{% endif %}
+                                        {% if watch_key in model.get('watched_download_keys', []) %}Remove from watchlist{% else %}Watch{% endif %}
                                     </button>
                                     {% elif ((version.get('access_status') in ['downloadable', 'gated'] or (version.get('access_status') == 'paid_access' and src.get('source') not in ['civitai','civitaired'])) or (src.get('source') == 'tensorhub' and version.get('access_status') == 'unconfirmed')) and (file.get('download_url') or file.get('model_file_id') or file.get('model_ver_no') or src.get('source') == 'huggingface') %}
-                                    <a class="file-download-btn" href="/download/source/{{ model['id'] }}/{{ src.get('source') }}/{{ file.get('_download_index', loop.index0) }}" target="_blank" rel="noopener" title="Download additional file">↓</a>
+                                    <a class="file-download-btn" href="/download/source/{{ model['id'] }}/{{ src.get('source') }}/{{ file.get('_download_index', loop.index0) }}" target="_blank" rel="noopener" title="{% if file.get('_installed_path') %}Installed: {{ file.get('_installed_path') }} — click to download again{% else %}Download additional file{% endif %}">{{ "✓" if file.get("_installed_path") else "↓" }}</a>
                                     {% else %}<span class="file-download-btn disabled" title="Direct download is currently unavailable">×</span>{% endif %}
                                 </div>
                                 {% endif %}
@@ -321,7 +344,9 @@
                         Open the source page to unlock/request access, then use Reload Model above to check again.
                     </div>
                     {% else %}
-                    <div class="download-source-missing">Source link is known, but its download metadata predates multi-source downloads. Use Reload Model above to update this model.</div>
+                    {% if src.get('source')=='local' %}
+                    <div class="download-source-missing">{{ 'Manually added local model.' if model.get('installed_locations') else 'No local file is currently linked to this card.' }}</div>
+                    {% else %}<div class="download-source-missing">Source link is known, but its download metadata predates multi-source downloads. Use Reload Model above to update this model.</div>{% endif %}
                     {% endif %}
                 {% endif %}
             </section>
@@ -333,12 +358,14 @@
         </div>
 
         <div class="download-management">
+            {% if model.get('source')!='local' or ready_sources %}
             <div class="download-sidecar-options" hidden>
                 <strong>Download options</strong>
                 <label><input type="checkbox" class="download-save-info"> Save model info</label>
                 <label><input type="checkbox" class="download-save-preview"> Save preview image</label>
                 <span>Defaults come from Settings. Changes here apply only to downloads from this card.</span>
             </div>
+            {% endif %}
             {% if model.get('download_status') in ['downloaded', 'update'] or model.get('newest_installed_display') %}
             <div class="download-manage-actions">
                 <strong>Manage download</strong>
@@ -354,6 +381,8 @@
 
 </div>
 
+
+</div><!-- detail-header -->
 
     <!-- MEDIA -->
 
@@ -389,8 +418,6 @@
             <div class="media-metadata-head">
                 <strong>Metadata</strong>
                 <div class="media-metadata-controls">
-                    <button type="button" class="media-metadata-toggle">More</button>
-                    <button type="button" class="media-metadata-hide" title="Hide metadata">×</button>
                 </div>
             </div>
             <div class="media-metadata-body"></div>
@@ -422,7 +449,10 @@
     <div class="detail-info">
 
         <div class="author-badges detail-author-badges" aria-label="Creator sources">
-            {% for identity in model.get('author_sources', []) %}
+            {% if model['source']=='local' %}
+                <span class="author-badge source-author-badge" style="--author-source-color:#B8C6E0">Local</span>
+                {% else %}
+                {% for identity in model.get('author_sources', []) %}
                 <a
                     class="author-badge source-author-badge"
                     data-source="{{ identity['source'] }}"
@@ -435,6 +465,7 @@
             {% else %}
                 <a class="author-badge" href="/creator/{{ model['author'] }}">{{ model['author'] }}</a>
             {% endfor %}
+                {% endif %}
         </div>
 
 
@@ -693,6 +724,15 @@
         </div>
 
 
+    </section>
+
+    <section class="model-card-management" aria-label="Manage model card">
+        <button type="button" class="delete-model-card">Delete model card</button>
+        <p>Remove this card and its source entries. Downloaded files stay on disk. You can scan or import the model again.</p>
+        <div class="delete-card-confirmation-status" hidden>
+            <span></span>
+            <button type="button" class="restore-delete-card-confirmation">Ask before deleting again</button>
+        </div>
     </section>
 
 </div>

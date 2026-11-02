@@ -11,7 +11,7 @@
     <!-- Core CSS -->
 
     <link rel="stylesheet" href="{{ url_for('static', filename='css/reset.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css', v='rc5') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 
 
@@ -20,10 +20,12 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components/cards.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components/badges.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components/detail.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/components/download.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/components/download.css', v='rc5') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components/gallery.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components/fullscreen.css') }}">
 
+
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/components/seen.css') }}">
 
     <!-- Navbar CSS -->
 
@@ -110,20 +112,18 @@
     <button id="feedBackToTop" class="back-to-top" type="button" aria-label="Back to top" title="Back to top">↑ Top</button>
 
     <!-- Feed empty state -->
-    <div id="emptyFilterState" class="empty-filter-state hidden">
-        <div>No models match the current filters.</div>
-        <button id="emptyResetFilters" type="button">Reset filters</button>
+    <div id="emptyFilterState" class="empty-filter-state hidden" data-library-count="{{ library_model_count | default(0) }}" role="status">
+        <div id="emptyFeedMessage">No models match the current filters.</div>
+        <button id="emptyResetFilters" type="button">Clear search and filters</button>
+        <button id="emptyShowStatuses" type="button" hidden>Show all statuses</button>
+        <button id="emptyScanAgain" type="button" hidden>Scan again</button>
     </div>
 
-    <!-- Confirmation overlay -->
-    <div id="seenConfirmOverlay" class="qol-overlay" aria-hidden="true">
-        <div class="qol-modal qol-confirm" role="dialog" aria-modal="true">
-            <h3 id="seenConfirmTitle">Mark models as seen?</h3>
-            <p id="seenConfirmText"></p>
-            <label class="qol-check"><input id="seenConfirmDontAsk" type="checkbox"> <span>Do not show this confirmation again</span></label>
-            <div class="qol-actions"><button id="seenConfirmCancel" type="button">Cancel</button><button id="seenConfirmAccept" class="primary" type="button">Mark as Seen</button></div>
-        </div>
-    </div>
+    <dialog id="markSeenDialog" class="seen-dialog" aria-labelledby="markSeenTitle" aria-describedby="markSeenScope">
+        <h3 id="markSeenTitle">Clear New status?</h3>
+        <p id="markSeenScope"></p>
+        <div class="qol-actions"><button id="markSeenCancel" type="button" autofocus>Cancel</button><button id="markSeenAccept" type="button">Clear New</button></div>
+    </dialog>
 
     <!-- Scan history overlay -->
     <div id="scanHistoryOverlay" class="qol-overlay" aria-hidden="true">
@@ -172,16 +172,21 @@
     </script>
 
 
-    <script src="{{ url_for('static', filename='js/filters.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/navbar.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/modal.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/filters.js', v='v2-onboarding') }}"></script>
+    <script src="{{ url_for('static', filename='js/seen_controls.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/navbar.js', v='rc9') }}"></script>
+    <script src="{{ url_for('static', filename='js/install_destination.js', v='rc5') }}"></script>
+    <script src="{{ url_for('static', filename='js/civitai_auth_checks.js', v='v2-mini') }}"></script>
+    <script src="{{ url_for('static', filename='js/modal.js', v='rc5') }}"></script>
     <script src="{{ url_for('static', filename='js/gallery.js') }}"></script>
     <script src="{{ url_for('static', filename='js/fullscreen.js') }}"></script>
     <script src="{{ url_for('static', filename='js/settings.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/feed_window.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/feed_window.js', v='rc14') }}"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 
 
+{% include "components/help_setup.html" %}
+<script src="{{ url_for('static',filename='js/help_setup.js',v='v2-onboarding') }}"></script>
 </body>
 
 </html>

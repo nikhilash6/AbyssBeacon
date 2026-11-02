@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Downloaded library · AbyssBeacon</title>
+  {% for sheet in ['reset.css','base.css','style.css','components/cards.css','components/badges.css','components/detail.css','components/download.css','components/gallery.css','components/fullscreen.css','components/seen.css','components/downloaded.css'] %}
+  <link rel="stylesheet" href="{{ url_for('static',filename='css/' ~ sheet, v=('rc5-duplicate' if sheet == 'components/downloaded.css' else 'rc5')) }}">
+  {% endfor %}
+<style>.library-view-controls{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-top:.65rem}.library-view-controls a{color:#7ad8dd}.library-view-controls .file-info-toggle{margin:0 0 0 auto}.downloaded-search{flex:1 1 15rem}</style>
+</head>
+<body class="downloaded-page">
+  <header class="downloaded-header"><a href="/" data-feed-restore="true">← Back to AbyssBeacon</a><div class="downloaded-header-actions"><button type="button" id="libraryMaintenanceOpen">Library maintenance</button> <button type="button" data-help-open>Help</button></div></header>
+  <dialog id="libraryMaintenance" class="downloaded-recovery-dialog">
+    <div class="downloaded-recovery-heading"><h2>Library maintenance</h2><button type="button" data-close-maintenance aria-label="Close">×</button></div>
+    <p>Adding a file for the first time? Choose Add existing model files. Already linked it and moved it? Choose Update model locations.</p>
+    <div class="maintenance-actions">
+      <button id="localImportOpen" type="button"><strong>Add existing model files</strong><span>Add models already on your computer, including files saved by your browser. Scan a folder, find matches, and confirm the links.</span></button>
+      <button id="installedRecoveryOpen" type="button"><strong>Update model locations</strong><span>Find previously linked or installed files after moving or renaming them, then update their saved locations.</span></button>
+      <button id="localInventoryOpen" type="button"><strong>Find duplicate files</strong><span>Compare full SHA-256 hashes to find identical file contents, even when filenames differ. Review their locations and decide which copies to keep.</span></button>
+      <details><summary>Older download repairs</summary><button id="extensionRepairOpen" type="button"><strong>Repair SeaArt filenames</strong><span>Fix missing file extensions on older SeaArt downloads. New downloads receive this correction automatically.</span></button></details>
+    </div>
+  </dialog>
+  <main class="downloaded-shell">
+    {% if browser_request %}<section id="browserDownloadNotice" class="library-notice" data-request-id="{{ browser_request.id }}" hidden>
+      <strong>Downloaded through your browser?</strong><p>AbyssBeacon sent {{ browser_request.filename or 'a model file' }} to your browser. If you saved it, add the existing file to see it in your library.</p>
+      <button type="button" data-open-import>Add existing model files</button>
+      <p>Want future downloads to appear here automatically? <a href="/?setup=downloads">Set up the Local Installer</a> to save models to your chosen folder and add them to your library.</p>
+      <button type="button" data-dismiss-browser="1">Dismiss for 1 day</button> <button type="button" data-dismiss-browser="7">Dismiss for 1 week</button>
+    </section>{% endif %}
+
+    <div class="downloaded-title"><div><h1>{{ 'Past downloads' if past else 'Downloaded library' }}</h1><p>{{ 'Previously recorded files no longer tracked as installed.' if past else 'Review your downloads, one file/version at a time.' }} Click a model card for details.</p></div><span>{{ total }} model group{{ '' if total == 1 else 's' }}</span></div>
+    <form class="downloaded-filters" id="libraryFilters" method="get" action="/downloaded">
+      <label>Review state<select name="state"><option value="">All review states</option>{% for value,label in [('not_tried','Not tried'),('keep','Keep'),('unsorted','Unsorted')] %}<option value="{{ value }}" {% if state==value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      <label>Architecture<select name="architecture"><option value="">All architectures</option>{% for name in architectures %}<option value="{{ name }}" {% if architecture==name %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+      <label>Model type<select name="model_type"><option value="">All model types</option>{% for name in model_types %}<option value="{{ name }}" {% if model_type==name %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+      <label>Download source<select name="source"><option value="">All sources</option>{% for key in available_sources %}<option value="{{ key }}" {% if key==selected_source %}selected{% endif %}>{{ {'local':'Local','huggingface':'Hugging Face','civitai':'CivitAI','civitaired':'CivitAI Red','modelscope':'ModelScope','tensorhub':'TensorHub Art','seaart':'SeaArt'}.get(key,key) }}</option>{% endfor %}</select></label>
+      <label>Sort<select name="sort"><option value="newest" {% if download_order=="newest" %}selected{% endif %}>Newest first</option><option value="oldest" {% if download_order=="oldest" %}selected{% endif %}>Oldest first</option></select></label>
+      <label class="downloaded-search">Search library<input type="search" name="q" value="{{ query }}" placeholder="Model, filename, creator, or tag"></label>
+      {% if past %}<input type="hidden" name="history" value="1">{% endif %}
+      <a href="{{ '/downloaded?history=1' if past else '/downloaded' }}">Clear filters</a>
+    </form>
+    <div class="downloaded-recovery-toolbar"><button id="installedRecoveryPageRefresh" type="button" hidden>Refresh installed status</button></div>
+    <div class="library-view-controls">
+      <label class="downloaded-heart-filter"><input form="libraryFilters" type="checkbox" name="starred" value="1" {% if starred %}checked{% endif %}><span>★ Starred only</span></label>
+      {% if past %}<a href="/downloaded">← Installed downloads</a>{% elif past_count %}<a href="/downloaded?history=1">Past downloads ({{ past_count }})</a>{% endif %}
+    <button type="button" class="file-info-toggle" id="fileInfoToggle">Collapse all file info</button></div>
+    <p class="downloaded-help">{{ "Oldest" if download_order=="oldest" else "Newest" }} download completion first. Review choices are separate from favorites. Recorded paths are not a disk scan.</p>
+    <div class="downloaded-grid feed-grid">
+    {% include 'components/downloaded_groups.html' %}
+    </div>
+    <div id="downloadedLoadSentinel" data-next-page="{{ page+1 }}" data-has-more="{{ 'true' if page<pages else 'false' }}"><span id="downloadedLoadStatus" role="status"></span><button id="downloadedLoadMore" type="button" {% if page>=pages %}hidden{% endif %}>Load more</button></div>
+    <button id="downloadedBackToTop" type="button" hidden aria-label="Back to top">↑ Top</button>
+  </main>
+  <div id="modelOverlay" class="model-overlay"><div class="model-panel"><div id="modelDetails"></div></div></div>
+  <div id="imageOverlay" class="image-overlay"><button id="closeImage" class="close-image" type="button">×</button><button id="fullscreenPrev" class="fullscreen-nav fullscreen-prev" type="button" aria-label="Previous image">‹</button><div class="fullscreen-wrapper"><img id="fullscreenImage" alt="Expanded preview"></div><button id="fullscreenNext" class="fullscreen-nav fullscreen-next" type="button" aria-label="Next image">›</button></div>
+  <dialog id="localInventoryDialog" class="downloaded-recovery-dialog" aria-labelledby="localInventoryTitle">
+    <div class="downloaded-recovery-heading"><h2 id="localInventoryTitle">Local files and duplicates</h2><button id="localInventoryClose" type="button" aria-label="Close">×</button></div>
+    <p id="localInventoryDescription">Includes files downloaded outside AbyssBeacon. Compares full SHA-256 hashes of files with matching sizes. No model files or installed records are changed.</p>
+    <h3>1 · Choose folders and scan</h3>
+    <label>Folders to scan (one full path per line)<textarea id="localInventoryRoots" rows="3"></textarea></label>
+    <details class="inventory-advanced"><summary>Advanced options</summary><label class="inventory-check"><input id="localInventoryRehash" type="checkbox"> Recheck cached hashes (slower)</label></details>
+    <div class="downloaded-recovery-actions"><button id="localInventoryBrowse" type="button">Browse…</button><button id="localInventoryStart" type="button">Scan local files</button><button id="localInventoryStop" type="button" hidden>Stop scan</button></div>
+    <p id="localInventoryStatus" role="status" aria-live="polite"></p>
+    <details class="inventory-advanced"><summary>Scan details</summary><p id="localInventoryDiagnostics"></p></details>
+    <section id="localInventoryReview" hidden><h3 id="localInventoryStepTwo">2 · Import model details</h3>
+    <div id="localInventoryFilters" hidden><label class="inventory-check"><input id="localInventorySafeOnly" type="checkbox" checked> Only .safetensors</label><label id="localInventoryDuplicatesLabel" class="inventory-check"><input id="localInventoryDuplicates" type="checkbox" checked> Show duplicates</label><label class="inventory-check"><input id="localInventoryUnlinked" type="checkbox"> Show files not linked to your library</label><details class="inventory-advanced"><summary>How matching works</summary><p>A file may already have a model card but still need its local location linked. We check its SHA-256 fingerprint with CivArchive. Only the fingerprint is sent; your files stay on your computer. Select up to 50 files at a time.</p></details></div>
+    <div class="downloaded-recovery-actions inventory-match-toolbar"><button id="localInventoryPaths" type="button">Hide full paths</button><button id="localInventorySelect" type="button">Select visible (up to 50)</button><button id="localInventoryClearSelection" type="button">Clear selection</button><button id="localInventoryIdentify" type="button" disabled>Find matches for selected files (0)</button><button id="localInventoryIdentifyStop" type="button" hidden>Stop identification</button></div>
+
+    <p class="inventory-matching-help">Select files below, then find matches using CivArchive. Review the matches before adding files to your library.</p><p id="localInventoryIdentifyStatus" role="status"></p><div id="localInventoryIdentifyResults"></div>
+    <p id="localInventoryDuplicateSummary" class="inventory-duplicate-summary" hidden></p><p id="localInventoryDuplicateHelp" class="inventory-duplicate-help" hidden>Choose the copy to keep. Use <strong>Open folder</strong> or <strong>Delete copy</strong> beside each duplicate. Deletion requires confirmation and another independently verified copy. Deleted files go to the Windows Recycle Bin, not permanent deletion. Hard links do not recover extra space.</p><div id="localInventoryResults"></div><button id="localInventoryMore" type="button" hidden>Show more results</button>
+    </section><div id="localImportOptions" hidden><h3>3 · Review and confirm import</h3><label class="inventory-check"><input id="localImportCompanions" type="checkbox"> Save preview image and model info</label><label class="inventory-check"><input id="localImportMove" type="checkbox"> Create a model subfolder and move selected files</label><p>Moving files changes their paths. Saved ComfyUI workflows may need their model selections updated. Existing destination files are never overwritten.</p><button id="localImportSave" type="button" disabled>Review import…</button><p id="localImportStatus" role="status"></p></div>
+    <details id="localInventoryErrors" hidden><summary>Folders or files that could not be checked</summary><pre></pre></details>
+  </dialog>
+  <dialog id="localInventoryDeleteConfirm" class="downloaded-recovery-dialog inventory-delete-dialog" aria-labelledby="localInventoryDeleteTitle">
+    <h2 id="localInventoryDeleteTitle">Move duplicate to Recycle Bin?</h2>
+    <p>The full path below is the exact file that will be recycled. Another independently verified copy must remain. This action does not remove the other copy.</p>
+    <p id="localInventoryDeletePath" class="inventory-delete-path"></p>
+    <p id="localInventoryDeleteInfo"></p>
+    <p id="localInventoryDeleteStatus" role="status" aria-live="polite"></p>
+    <div class="downloaded-delete-actions"><button id="localInventoryDeleteCancel" type="button">Cancel</button><button id="localInventoryDeleteAccept" type="button" class="inventory-delete-action">Move to Recycle Bin</button></div>
+  </dialog>
+  <dialog id="localImportConfirm" class="downloaded-recovery-dialog" aria-labelledby="localImportConfirmTitle"><h2 id="localImportConfirmTitle">Confirm local model import</h2><p>Review the exact files and destinations. Files staying in place will only be recorded as installed. Existing cards and review decisions are preserved.</p><div id="localImportPlan"></div><div class="downloaded-recovery-actions"><button id="localImportCancel" type="button">Cancel</button><button id="localImportAccept" type="button">Confirm import</button></div></dialog>
+  <dialog id="extensionRepairModelDialog" class="extension-repair-model-dialog" aria-label="Model details"></dialog>
+  <dialog id="forgetReviewDialog" class="downloaded-delete-dialog" aria-labelledby="forgetReviewTitle" aria-describedby="forgetReviewDescription">
+    <form method="dialog">
+      <h2 id="forgetReviewTitle">Forget this past download?</h2>
+      <p><strong id="forgetReviewFilename" style="overflow-wrap:anywhere"></strong></p>
+      <p id="forgetReviewDescription">Remove this entry, its review, and its personal tags from Past downloads. Files on disk are kept.</p>
+      <label><input id="skipForgetReview" type="checkbox"> Skip this confirmation for 1 hour</label>
+      <div class="downloaded-delete-actions"><button value="cancel" autofocus>Cancel</button><button value="forget" style="color:#f6a2ad;border-color:#8a4350">Forget entry</button></div>
+    </form>
+  </dialog>
+  <dialog id="downloadedDeleteDialog" class="downloaded-delete-dialog" aria-labelledby="downloadedDeleteTitle">
+    <h2 id="downloadedDeleteTitle">Delete local files?</h2><p>This permanently deletes the listed files. Model cards, download history, review choices and tags are kept.</p>
+    <ul id="downloadedDeleteFiles"></ul><p id="downloadedDeleteFolder"></p>
+    <div class="downloaded-delete-actions"><button type="button" id="downloadedDeleteCancel">Cancel</button><button type="button" id="downloadedDeleteAccept">Delete listed files</button></div>
+  </dialog>
+  <dialog id="extensionRepairDialog" class="downloaded-recovery-dialog" aria-labelledby="extensionRepairTitle">
+    <div class="downloaded-recovery-heading"><h2 id="extensionRepairTitle">Repair SeaArt filenames</h2><button id="extensionRepairClose" type="button" aria-label="Close">×</button></div>
+    <p>Choose folders containing affected SeaArt downloads. This tool can also check extensionless files from other sources. The scan checks file headers and makes no changes. Select files after reviewing the proposed names. Files without confirmed formats can be reviewed later.</p>
+    <h3>1 · Choose folders and scan</h3>
+    <label>Folders to scan (one full path per line)<textarea id="extensionRepairRoots" rows="3" placeholder="C:\ComfyUI\models\loras\AbyssBeacon\SeaArt"></textarea></label>
+    <div class="downloaded-recovery-actions"><button id="extensionRepairBrowse" type="button">Browse…</button><button id="extensionRepairStart" type="button">Scan filenames</button></div>
+    <p id="extensionRepairStatus" role="status" aria-live="polite"></p>
+    <section id="extensionRepairReview" hidden><h3>2 · Review proposed filenames</h3><button id="extensionRepairSelectVerified" type="button" hidden>Select all with detected formats</button><div id="extensionRepairResults"></div>
+    </section><section id="extensionRepairFinish" hidden><h3>3 · Confirm filename repairs</h3><div class="downloaded-recovery-actions"><button id="extensionRepairApply" type="button" hidden>Review and confirm…</button><span id="extensionRepairSelectionHint">Select at least one file.</span></div></section>
+  </dialog>
+  <dialog id="extensionRepairConfirm" class="downloaded-delete-dialog" aria-labelledby="extensionRepairConfirmTitle"><h2 id="extensionRepairConfirmTitle">Confirm filename repairs</h2><p id="extensionRepairConfirmText"></p><ul id="extensionRepairConfirmList"></ul><div class="downloaded-delete-actions"><button type="button" id="extensionRepairConfirmCancel">Cancel</button><button type="button" id="extensionRepairConfirmAccept">Rename listed files</button></div></dialog>
+  <dialog id="installedRecoveryDialog" class="downloaded-recovery-dialog" aria-labelledby="installedRecoveryTitle">
+    <div class="downloaded-recovery-heading"><h2 id="installedRecoveryTitle">Update model locations</h2><button id="installedRecoveryClose" type="button" aria-label="Close file recovery">×</button></div>
+    <p><strong>For files already linked to your library.</strong> To add a browser download for the first time, <button type="button" data-open-import>Add existing model files</button>.</p><p id="installedRecoveryHelp">Checks recorded locations first, then searches the selected folders and subfolders for moved files. Start with your ComfyUI models folder and add any other model drives. A file not found in these folders may still exist elsewhere. Records are never removed automatically.</p>
+    <form id="installedRecoveryForm">
+      <div id="installedRecoveryFolders"><h3>1 · Choose records and folders</h3><details><summary>Limit to model types (default: all types)</summary><div id="installedRecoveryTypes"></div><p>Uses your local install type when set; otherwise uses saved source metadata. Folder names do not restrict matching.</p></details><label>Folders to scan (one full path per line)<textarea id="installedRecoveryRoots" rows="3" placeholder="C:\ComfyUI\models"></textarea></label><label class="recovery-check"><input id="installedRecoveryRemember" type="checkbox" checked>Remember these folders</label><label class="recovery-check"><input id="installedRecoveryFindCopies" type="checkbox">Also find other copies of files still present</label><label class="recovery-check"><input id="installedRecoveryAutoExact" type="checkbox" checked>Automatically save exact SHA-256 + filename matches</label></div>
+      <div id="installedRecoveryFile" hidden><label>Full path to the model file<input id="installedRecoveryPath" type="text"></label><button type="button" data-recovery-browse="file">Browse…</button></div>
+      <div class="downloaded-recovery-actions"><button id="installedRecoveryBrowseFolder" type="button" data-recovery-browse="folder">Browse…</button><button id="installedRecoveryStart" type="submit">Start file scan</button><button id="installedRecoveryCancel" type="button" hidden>Cancel scan</button></div>
+    </form>
+    <p id="installedRecoveryProgress" role="status" aria-live="polite"></p>
+    <div id="installedRecoveryResults" hidden><h3>2 · Review scan results</h3>
+      <div class="recovery-result-jumps"><button id="installedRecoveryTop" type="button" aria-label="Top of scan results">↑ Top</button><button id="installedRecoveryBottom" type="button" aria-label="Bottom of scan results">↓ Bottom</button></div>
+      <p id="installedRecoverySummary"></p><label class="recovery-check"><input id="installedRecoveryIncludeCurrent" type="checkbox">Show all scan results</label><label class="recovery-check"><input id="installedRecoveryIncludeMissing" type="checkbox" checked>Show missing files (not found in searched folders)</label>
+      <div id="installedRecoveryWarnings"></div><button id="installedRecoveryAutoUpdate" type="button">Save remaining exact matches</button><p id="installedRecoveryAutoHelp">Only matching SHA-256 AND expected filename qualify for automatic updates. The list shows uncertain matches needing your review. Missing files remain for explicit review; no records are removed by scanning.</p><div id="installedRecoveryRows"></div>
+      <details id="installedRecoveryUnknown" hidden><summary>Unrecognized files</summary><p>These files are not verified matches for the saved downloads checked here. Nothing will be imported or changed.</p><div id="installedRecoveryUnknownRows"></div></details>
+
+      <div id="installedRecoveryEmpty" class="inventory-empty" hidden><h3>No files need attention in this view</h3><p>Use Show all scan results to see files already at their recorded locations, or search another folder.</p><button id="installedRecoverySearchNew" type="button">Search a new folder</button></div>
+      <nav id="installedRecoveryPaging" class="recovery-pagination" aria-label="Location scan result pages" hidden><button id="installedRecoveryPrevious" type="button">← Previous</button><span id="installedRecoveryPage" role="status"></span><button id="installedRecoveryNext" type="button">Next →</button></nav>
+      <section id="installedRecoveryFinish" hidden><h3>3 · Apply changes</h3><div class="downloaded-recovery-actions"><button id="installedRecoveryApply" type="button" disabled>Save location changes</button><span id="installedRecoverySelectionHint">Select a location or missing record above.</span></div>      <div id="installedRecoveryMissingActions" hidden><p>Missing files may be elsewhere. Select records to remove only for files you know were deleted. Model cards and physical files are kept.</p><button id="installedRecoverySelectMissing" type="button">Select all missing on this page</button><button id="installedRecoveryRemoveMissing" type="button" disabled>Remove selected download records…</button></div></section><button id="installedRecoveryRefresh" type="button" hidden>Refresh downloaded library</button>
+      <div id="installedRecoveryFollowup" class="recovery-followup"><p>Still missing files?</p><button id="installedRecoverySearchMore" type="button">Search more folders for unresolved files</button><p id="installedRecoveryContinue" hidden>Next scan will check only unresolved records from this scan. <button id="installedRecoveryResetScope" type="button">Start a fresh scan</button></p></div>
+    </div>
+  </dialog>
+  <dialog id="installedRecoveryConfirm" class="downloaded-delete-dialog" aria-labelledby="installedRecoveryConfirmTitle"><h2 id="installedRecoveryConfirmTitle"></h2><p id="installedRecoveryConfirmHelp"></p><ul id="installedRecoveryConfirmList"></ul><label id="installedRecoverySkipUntrackLabel" class="recovery-confirm-check" hidden><input id="installedRecoverySkipUntrack" type="checkbox">Do not show again until the next file-location scan</label><div class="downloaded-delete-actions"><button id="installedRecoveryConfirmCancel" type="button">Cancel</button><button id="installedRecoveryConfirmAccept" type="button">Confirm</button></div></dialog>
+  <dialog id="installedRecoveryUnsaved" class="downloaded-delete-dialog" aria-labelledby="installedRecoveryUnsavedTitle"><h2 id="installedRecoveryUnsavedTitle">Unsaved location changes</h2><p id="installedRecoveryUnsavedMessage"></p><ul id="installedRecoveryUnsavedList"></ul><div class="downloaded-delete-actions recovery-unsaved-actions"><button id="installedRecoveryUnsavedCancel" type="button">Cancel</button><button id="installedRecoveryUnsavedDiscard" type="button">Discard and continue</button><button id="installedRecoveryUnsavedSave" type="button">Save location changes</button></div></dialog>
+  <script id="user-preferences" type="application/json">{{ preferences|tojson }}</script>
+  {% for script in ['filters.js','navbar.js','install_destination.js','modal.js','gallery.js','fullscreen.js','downloaded.js','repair_paths.js','repair_model.js','installed_recovery.js','extension_repair.js','local_model_link.js','local_inventory.js','repair_steps.js','library_guidance.js','help_setup.js'] %}<script src="{{ url_for('static',filename='js/' ~ script, v=('v2-duplicate' if script == 'local_inventory.js' else 'v2-onboarding')) }}"></script>{% endfor %}
+{% include "components/help_setup.html" %}
+</body>
+</html>

@@ -1,4 +1,6 @@
 import sqlite3
+import architecture_seen
+import download_reviews
 import json
 import hashlib
 import os
@@ -398,10 +400,19 @@ def initialize():
         if name not in collection_family_columns:
             c.execute(f"ALTER TABLE collection_families ADD COLUMN {name} {definition}")
 
+    _architecture_seen_migration = architecture_seen.ensure_schema(conn)
     conn.commit()
     conn.close()
 
     migrate()
+    if _architecture_seen_migration:
+        print("Initializing architecture New/Seen states; existing Seen choices are preserved.")
+    conn = connect()
+    try:
+        with conn:
+            architecture_seen.backfill(conn)
+    finally:
+        conn.close()
     purge_discovery_suppressed_creators()
     _INITIALIZED = True
 
@@ -538,6 +549,7 @@ def _register_model_source(cursor, model_id, source, url, model_key, model=None)
     )
     if _model_mapping(model):
         _register_model_hashes(cursor, model_id, source, model_key, model)
+    architecture_seen.sync(cursor, model_id)
 
 
 def get_model_sources(model_id):
@@ -682,6 +694,7 @@ def refresh_model_source_snapshot(model_id, source, model_key, snapshot, url="")
         (int(model_id), source, model_key),
     )
     _register_model_hashes(c, int(model_id), source, model_key, snapshot)
+    architecture_seen.sync(c, int(model_id))
 
     conn.commit()
     conn.close()
@@ -910,6 +923,10 @@ def _card_merge_identity(cursor, row):
 
 def _find_cross_source_duplicate(cursor, model):
     incoming = _model_mapping(model)
+    from model_merge_repair import find_new_mirror
+    mirror = find_new_mirror(cursor, incoming)
+    if mirror is not None:
+        return mirror
     signature = complete_model_identity(incoming)
     if signature is None:
         return None
@@ -1027,6 +1044,7 @@ def _merge_existing_model_rows(cursor, winner_id, loser_id):
         cursor.execute(f"UPDATE {table} SET model_id=? WHERE model_id=?", (winner_id, loser_id))
     cursor.execute("UPDATE OR IGNORE scan_model_changes SET model_id=? WHERE model_id=?", (winner_id, loser_id))
     cursor.execute("DELETE FROM scan_model_changes WHERE model_id=?", (loser_id,))
+    architecture_seen.merge(cursor, winner_id, loser_id)
     cursor.execute("DELETE FROM models WHERE id=?", (loser_id,))
     return True
 
@@ -2462,14 +2480,7 @@ def mark_viewed(model_id):
         conn = None
         try:
             conn = connect()
-            conn.execute(
-                """
-                UPDATE models
-                SET viewed = 1
-                WHERE id = ?
-                """,
-                (model_id,)
-            )
+            architecture_seen.mark(conn, ids=[model_id])
             conn.commit()
             return True
 
@@ -2497,26 +2508,21 @@ def mark_viewed(model_id):
 
 def mark_all_viewed():
     conn = connect()
-    c = conn.cursor()
-    c.execute("UPDATE models SET viewed = 1 WHERE viewed = 0")
-    changed = c.rowcount
-    conn.commit()
-    conn.close()
-    return changed
+    try:
+        with conn:
+            return architecture_seen.mark(conn)['changed']
+    finally:
+        conn.close()
 
 
 def mark_models_viewed(model_ids):
-    ids = [int(model_id) for model_id in model_ids if str(model_id).isdigit()]
-    if not ids:
-        return 0
     conn = connect()
-    c = conn.cursor()
-    placeholders = ",".join("?" for _ in ids)
-    c.execute(f"UPDATE models SET viewed = 1 WHERE viewed = 0 AND id IN ({placeholders})", ids)
-    changed = c.rowcount
-    conn.commit()
-    conn.close()
-    return changed
+    try:
+        with conn:
+            return architecture_seen.mark(conn, ids=model_ids)['changed']
+    finally:
+        conn.close()
+
 
 def add_media(
     model_id,
@@ -3484,7 +3490,7 @@ def record_download(
 
 def record_installed_file(
     model_id, source, model_key, source_file_id, file_fingerprint,
-    local_path, filename, version_id="", version_name=""
+    local_path, filename, version_id="", version_name="", install_category=""
 ):
     if not source or not local_path:
         return False
@@ -3513,22 +3519,48 @@ def record_installed_file(
             datetime.now(timezone.utc).isoformat(),
         ),
     )
+    installed = conn.execute('SELECT * FROM installed_files WHERE local_path=?',(str(local_path),)).fetchone()
+    review_id=download_reviews.record(conn,installed)
+    if install_category:
+        conn.execute('UPDATE download_reviews SET install_category=? WHERE id=?',(install_category,review_id))
     conn.commit(); conn.close(); return True
 
 
 def get_download_history_lookup():
-    """Return history grouped by (source, model_key) for fast card annotation."""
+    """Return download history and current installs for fast card annotation."""
     conn = connect()
     rows = conn.execute(
         """SELECT source, model_key, source_file_id, file_key, filename, sha,
                   source_updated, file_fingerprint, version_id, version_name, downloaded_at
            FROM download_history ORDER BY downloaded_at DESC"""
     ).fetchall()
+    # Local imports have no download event. Include their current installations
+    # in this read-only status lookup without manufacturing persistent history.
+    installed = conn.execute(
+        """SELECT i.source, i.model_key, i.source_file_id, '' AS file_key,
+                  i.filename, COALESCE(r.verified_sha256, '') AS sha,
+                  '' AS source_updated, i.file_fingerprint, i.version_id,
+                  i.version_name, i.installed_at AS downloaded_at
+           FROM installed_files i
+           LEFT JOIN download_reviews r ON r.id=i.review_id
+           ORDER BY i.installed_at DESC, i.id DESC"""
+    ).fetchall()
+    removed = { (str(r['source']).lower(),str(r['model_key']),str(r['file_fingerprint'])) for r in conn.execute("""
+        SELECT r.source,r.model_key,r.file_fingerprint FROM download_reviews r WHERE (r.deleted_at<>'' OR r.uninstalled_at<>'')
+        AND NOT EXISTS(SELECT 1 FROM installed_files i WHERE lower(i.source)=lower(r.source)
+          AND i.model_key=r.model_key AND i.file_fingerprint=r.file_fingerprint)""") }
     conn.close()
     result = {}
     for row in rows:
         key = (str(row["source"] or "").lower(), str(row["model_key"] or ""))
-        result.setdefault(key, []).append(dict(row))
+        item=dict(row);item['local_deleted']=(*key,str(row['file_fingerprint'])) in removed
+        result.setdefault(key, []).append(item)
+    for row in installed:
+        key = (str(row["source"] or "").lower(), str(row["model_key"] or ""))
+        item = dict(row)
+        item["local_deleted"] = False
+        item["local_install"] = True
+        result.setdefault(key, []).append(item)
     return result
 
 
@@ -3788,8 +3820,9 @@ def get_installed_files_for_model(model_id):
     """Return exact local files AbyssBeacon recorded for one card."""
     conn = connect()
     rows = conn.execute(
-        """SELECT id, model_id, source, model_key, local_path, filename, version_id, version_name, installed_at
-           FROM installed_files WHERE model_id=? ORDER BY installed_at DESC, id DESC""",
+        """SELECT i.id, i.model_id, i.source, i.model_key, i.review_id, i.file_fingerprint, i.local_path, i.filename, i.version_id, i.version_name, i.installed_at, r.location_updated_at
+           FROM installed_files i LEFT JOIN download_reviews r ON r.id=i.review_id
+           WHERE i.model_id=? ORDER BY i.installed_at DESC, i.id DESC""",
         (int(model_id),),
     ).fetchall()
     conn.close()
@@ -3900,6 +3933,9 @@ def clear_tracking_for_installed_records(model_id, installed_ids):
             f"DELETE FROM download_history WHERE model_id=? AND ({where})", params
         )
         history_deleted = int(cur.rowcount or 0)
+    conn.execute(f"""UPDATE download_reviews SET deleted_at=CURRENT_TIMESTAMP WHERE id IN
+        (SELECT review_id FROM installed_files WHERE model_id=? AND id IN ({marks}))""",
+        [int(model_id), *ids])
     cur = conn.execute(
         f"DELETE FROM installed_files WHERE model_id=? AND id IN ({marks})",
         [int(model_id), *ids],
@@ -4315,6 +4351,8 @@ def migrate():
             parts.append(f"{abyss_path_migration['sidecars']} info sidecar(s)")
         print("AbyssBeacon rename migration: repaired " + ", ".join(parts))
 
+    download_reviews.ensure_schema(conn)
+
     c.execute("""
         CREATE TABLE IF NOT EXISTS blocked_creators (
             id INTEGER PRIMARY KEY,
@@ -4409,6 +4447,8 @@ def migrate():
         "CREATE INDEX IF NOT EXISTS idx_model_sources_model_id "
         "ON model_sources(model_id)"
     )
+
+    c.execute('CREATE INDEX IF NOT EXISTS idx_model_sources_lookup_ci ON model_sources(lower(source),model_key)')
 
     # Source-specific snapshots power the multi-source download chooser.
     source_columns = {row["name"] for row in c.execute("PRAGMA table_info(model_sources)").fetchall()}

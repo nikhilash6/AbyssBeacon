@@ -1,0 +1,5 @@
+{% if collection_pages > 1 %}<nav class="collection-pagination" aria-label="Collection pages">
+{% if collection_page > 1 %}<a href="{{ collection_previous }}">← Previous</a>{% endif %}
+<label>Page <select class="collection-page-select" aria-label="Collection page">{% for n in range(1,collection_pages+1) %}<option value="{{ n }}" {% if n==collection_page %}selected{% endif %}>{{ n }}</option>{% endfor %}</select> of {{ collection_pages }} · 100 families per page</label>
+{% if collection_page < collection_pages %}<a href="{{ collection_next }}">Next →</a>{% endif %}
+</nav>{% endif %}

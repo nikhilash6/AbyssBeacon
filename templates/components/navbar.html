@@ -4,9 +4,13 @@
 
     {% if creator_page_mode or collection_page_mode %}
     <div class="nav-secondary-return">
+        {% if collection_page_mode and 'library_filters' in request.args %}
+        <a href="/downloaded{% if request.args.get('library_filters') %}?{{ request.args.get('library_filters') }}{% endif %}" class="nav-secondary-return-button">← Back to Downloaded library</a>
+        {% else %}
         <a href="/" class="nav-secondary-return-button" data-feed-restore="true" title="Return to the AbyssBeacon home feed">
             ← Back to AbyssBeacon
         </a>
+        {% endif %}
     </div>
     {% else %}
     {% include "components/navbar/brand.html" %}
@@ -60,15 +64,15 @@
             </div>
             <div class="nav-summary-statuses">
                 <span class="nav-count-pair">
-                    <strong id="newCountValue" class="nav-count-value">{{ new_count }}</strong>
+                    <strong id="newCountValue" class="nav-count-value" title="New for selected feed architectures, or enabled architectures when unfiltered. Excludes Other.">{{ new_count }}</strong>
                     <button id="newCount"
                             class="nav-count-shortcut"
                             type="button"
-                            title="Show new models">
+                            title="Show new models. Counts selected feed architectures, or enabled architectures when unfiltered. Excludes Other.">
                         new
                     </button>
                 </span>
-                <span class="summary-dot">•</span>
+                <span class="summary-dot" aria-hidden="true">•</span>
                 <span class="nav-count-pair">
                     <strong id="updatedCountValue" class="nav-count-value">{{ updated_count | default(0) }}</strong>
                     <button id="updatedCount"
@@ -93,17 +97,13 @@
                 title="Reload this Collection from its attached source(s)"
             >↻ Reload</button>
             {% if source_url %}
-            <button
-                type="button"
-                id="collectionCopyLinkButton"
-                class="collection-copy-link"
-                data-copy-url="{{ source_url }}"
-                title="Copy this Collection's source URL"
-            >Copy URL</button>
             <a class="collection-source-link" href="{{ source_url }}" target="_blank" rel="noopener noreferrer">View on {{ source_label }}</a>
             {% endif %}
             <div class="navbar-download-links">
-                <button id="downloadHistoryButton" class="download-history-button" type="button">Download Manager</button>
+                <span class="nav-downloads-label">Downloads:</span>
+                <a href="/downloaded" class="download-history-button nav-library-link" aria-label="Open downloaded library">Library</a>
+                <span class="summary-dot" aria-hidden="true">•</span>
+                <button id="downloadHistoryButton" class="download-history-button" type="button" aria-label="Open Download Manager">Manager</button>
                 <span id="activeDownloadPing" class="active-download-ping" hidden
                       title="Download active" aria-label="Download active"></span>
             </div>
@@ -120,6 +120,14 @@
         </div>
         {% else %}
         <div class="nav-scan-center">
+            <button id="clearNewLibraryButton" class="clear-new-pill" type="button" aria-haspopup="dialog" title="Clear New status across the entire library">Clear New</button>
+            <details id="markSeenMenu" class="mark-seen-menu" hidden>
+                <summary class="clear-new-pill">Clear New ▾</summary>
+                <div class="mark-seen-actions">
+                    <button type="button" id="markArchitecturesSeen">Selected architectures…</button>
+                    <button type="button" id="markLibrarySeen">Entire library…</button>
+                </div>
+            </details>
             <button id="scanButton" type="button" title="Scan the currently enabled sources for models.">SCAN</button>
         </div>
 
@@ -134,7 +142,10 @@
                 <span id="lastScan" class="last-scan-value">{{ last_scan }}</span>
             </div>
             <div class="navbar-download-links">
-                <button id="downloadHistoryButton" class="download-history-button" type="button">Download Manager</button>
+                <span class="nav-downloads-label">Downloads:</span>
+                <a href="/downloaded" class="download-history-button nav-library-link" aria-label="Open downloaded library">Library</a>
+                <span class="summary-dot" aria-hidden="true">•</span>
+                <button id="downloadHistoryButton" class="download-history-button" type="button" aria-label="Open Download Manager">Manager</button>
                 <span id="activeDownloadPing" class="active-download-ping" hidden
                       title="Download active" aria-label="Download active"></span>
             </div>
@@ -142,7 +153,7 @@
         {% endif %}
     </div>
 
-    <div class="nav-actions">
+    <div class="nav-actions"{% if collection_page_mode %} hidden style="display:none"{% endif %}>
         <div class="options-wrapper">
             <button id="optionsButton" class="options-button" type="button" aria-label="Options">
                 <span id="activeFilterDot" class="active-filter-dot hidden" aria-hidden="true"></span>
@@ -170,6 +181,7 @@
       </div>
       <button id="closeDownloadHistory" type="button" aria-label="Close Download History">×</button>
     </div>
+    <a class="downloaded-library-link" href="/downloaded" onclick="window.modelRadarPrepareFeedDeparture?.()">Open downloaded library →</a>
     <div class="download-manager-tabs" role="tablist">
       <button id="downloadManagerActiveTab" class="download-manager-tab" type="button" role="tab">Active <span id="downloadActiveCount"></span></button>
       <button id="downloadManagerHistoryTab" class="download-manager-tab active" type="button" role="tab">History</button>
@@ -220,6 +232,10 @@
       <div class="scan-config-picker-body"><div class="scan-config-heading"><button type="button" data-select-group="scanModelType" data-select-action="all">Select All</button><button type="button" data-select-group="scanModelType" data-select-action="clear">Clear</button></div>
       <div class="scan-config-grid">{% for model_type in model_types %}<label class="scan-config-choice"><input type="checkbox" name="scanModelType" value="{{ model_type }}" {% if not preferences.get('scan_model_types') or model_type in preferences.get('scan_model_types', []) %}checked{% endif %}><span>{{ model_type }}</span></label>{% endfor %}</div></div>
     </details>
+    <div class="scan-seen-option">
+      <label class="scan-clear-seen"><input type="checkbox" id="clearSeenBeforeScan" {% if preferences.get('clear_seen_before_scan') %}checked{% endif %}><span>Clear New status for existing models before scanning</span></label>
+      <small id="preScanSeenScope" class="pre-scan-seen-scope" aria-live="polite" hidden></small>
+    </div>
     <div id="scanConfigStatus" class="source-search-status"></div>
     <div class="source-search-actions scan-config-actions">
       <button

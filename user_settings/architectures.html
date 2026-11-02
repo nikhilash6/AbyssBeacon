@@ -21,8 +21,7 @@ body{margin:0;background:#080b10;color:#f4f7fb}
 .family-head .choice{flex:1}
 .family-toggle{border:1px solid rgba(0,234,255,.35);background:#07151b;color:#91eaf3;border-radius:18px;padding:7px 12px;cursor:pointer}
 .family-toggle:hover{border-color:#00eaff}
-.family-items{display:none;padding:0 17px 15px 48px;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
-.family.open .family-items{display:grid}
+.family-items{display:none}
 .variant{padding:10px 12px;border:1px solid #263241;border-radius:10px;background:#0a1016}
 .variant .choice span{font-size:15px;font-weight:600;color:#dcebf0}
 .actions{display:flex;align-items:center;gap:12px;margin-top:20px}
@@ -64,12 +63,42 @@ button.save{border:1px solid #00d9ff;border-radius:8px;padding:10px 18px;backgro
     .scan-footer { align-items: stretch; }
     .scan-window-link { margin-left: 0; }
 }
-@media(max-width:720px){.models{grid-template-columns:1fr}.family-items{grid-template-columns:1fr;padding-left:17px}}
+@media(max-width:720px){.models{grid-template-columns:1fr}}
 
 .bulk-actions{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin:-4px 0 12px}
 .bulk-action{border:0;background:transparent;color:#00d9ff;font:inherit;font-size:13px;cursor:pointer;padding:4px 2px}
 .bulk-action:hover{text-decoration:underline}
 .bulk-sep{color:#526274;font-size:12px}
+
+.page{width:min(1200px,calc(100% - 32px));margin:14px auto 24px}.subtitle{margin:0 0 10px;font-size:14px}.notice{font-size:12px;margin-bottom:12px}.model-row,.family-head{padding:10px 12px}.choice span{font-size:15px}.models{gap:9px}.scan-footer{position:sticky;bottom:0;background:#080b10;padding:12px 0;margin-top:14px}
+@media(min-width:950px){.models{grid-template-columns:repeat(3,minmax(0,1fr))}}
+/* Keep the compact Models to Scan page unchanged. Variants open in a separate overlay. */
+.variant-dialog-overlay[hidden]{display:none!important}
+.variant-dialog-overlay{position:fixed;inset:0;z-index:2500;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,3,8,.81);backdrop-filter:blur(5px)}
+.variant-dialog{display:flex;flex-direction:column;width:min(100%,940px);max-height:calc(100vh - 40px);border:1px solid #226071;border-radius:18px;background:#0b111a;color:#e8f5f8;box-shadow:0 24px 90px rgba(0,0,0,.75);overflow:hidden}
+.variant-dialog-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:22px 24px 16px;border-bottom:1px solid #263847}
+.variant-dialog-header h2{font-size:24px;line-height:1.25;margin:0 0 7px}
+.variant-dialog-subtitle{font-size:14px;line-height:1.5;color:#97abbc;margin:0}
+.variant-dialog-close{flex:0 0 auto;width:38px;height:38px;display:grid;place-items:center;background:#111a24;border:1px solid #2e4d5c;border-radius:50%;color:#d1f7ff;font-size:24px;cursor:pointer}
+.variant-dialog-close:hover,.variant-dialog-close:focus-visible{border-color:#00eaff}
+.variant-dialog-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 24px;border-bottom:1px solid #1d2b38}
+.variant-dialog-count{color:#9cdbe6;font-size:14px}
+.variant-dialog-bulk{display:flex;gap:14px}
+.variant-dialog-bulk button{border:0;background:transparent;color:#00d9ff;font-size:14px;cursor:pointer;padding:6px 0}
+.variant-dialog-bulk button:hover{text-decoration:underline}
+.variant-dialog-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:20px 24px 24px;overflow-y:auto;min-height:0}
+.variant-dialog-option{display:flex;align-items:center;gap:14px;min-width:0;min-height:66px;padding:14px 16px;border-radius:12px;border:1px solid #2a3c4e;background:#0d1722;cursor:pointer}
+.variant-dialog-option:hover{border-color:#188ba4;background:#0d1e29}
+.variant-dialog-option:has(input:checked){border-color:#187b8f;background:#0b2430}
+.variant-dialog-option input{width:22px;height:22px;accent-color:#00dff2;flex:0 0 auto}
+.variant-dialog-option span{min-width:0;font-size:16px;font-weight:600;line-height:1.4;overflow-wrap:anywhere}
+.variant-dialog-footer{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:15px 24px;border-top:1px solid #263847}
+.variant-dialog-footer p{font-size:13px;line-height:1.4;color:#899eae;margin:0}
+.variant-dialog-done{background:#061a22;color:#e6faff;border:1px solid #00bde0;border-radius:9px;padding:10px 23px;font:inherit;cursor:pointer}
+.variant-dialog-done:hover{background:#10303d}
+body.variant-dialog-active{overflow:hidden}
+@media(max-width:620px){.variant-dialog-overlay{padding:8px}.variant-dialog{max-height:calc(100vh - 16px)}.variant-dialog-header{padding:18px 16px 12px}.variant-dialog-toolbar{padding:10px 16px}.variant-dialog-list{grid-template-columns:1fr;padding:14px 16px;gap:8px}.variant-dialog-footer{padding:12px 16px}.variant-dialog-footer p{font-size:12px}}
+
 </style>
 
 </head>
@@ -101,7 +130,7 @@ button.save{border:1px solid #00d9ff;border-radius:8px;padding:10px 18px;backgro
         <input class="family-check" type="checkbox">
         <span>{{ group.name }}</span>
       </label>
-      <button class="family-toggle" type="button" aria-expanded="false">Variants ▾</button>
+      <button class="family-toggle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="modelVariantDialog">Variants ▾</button>
     </div>
     <div class="family-items">
       {% for item in group['items'] %}
@@ -124,6 +153,32 @@ button.save{border:1px solid #00d9ff;border-radius:8px;padding:10px 18px;backgro
   </div>
   {% endif %}
 {% endfor %}
+</div>
+
+
+<!-- Variant choices remain in their original family for state and Save; the dialog mirrors their checked state. -->
+<div class="variant-dialog-overlay" id="modelVariantOverlay" hidden>
+  <section class="variant-dialog" id="modelVariantDialog" role="dialog" aria-modal="true" aria-labelledby="modelVariantTitle" aria-describedby="modelVariantDescription">
+    <header class="variant-dialog-header">
+      <div>
+        <h2 id="modelVariantTitle">Model variants</h2>
+        <p id="modelVariantDescription" class="variant-dialog-subtitle">Choose the variants to include in normal scans.</p>
+      </div>
+      <button class="variant-dialog-close" id="modelVariantClose" type="button" aria-label="Close variants">×</button>
+    </header>
+    <div class="variant-dialog-toolbar">
+      <span class="variant-dialog-count" id="modelVariantCount" aria-live="polite"></span>
+      <div class="variant-dialog-bulk">
+        <button id="modelVariantSelectAll" type="button">Select all variants</button>
+        <button id="modelVariantClearAll" type="button">Clear all variants</button>
+      </div>
+    </div>
+    <div class="variant-dialog-list" id="modelVariantList"></div>
+    <footer class="variant-dialog-footer">
+      <p>Changes are saved when you select Save on the Models to Scan page.</p>
+      <button class="variant-dialog-done" id="modelVariantDone" type="button">Done</button>
+    </footer>
+  </section>
 </div>
 
     <div class="scan-footer">
@@ -172,12 +227,89 @@ document.querySelectorAll('.family').forEach(family=>{
   });
   children.forEach(child=>child.addEventListener('change',()=>{syncFamily(family);markUnsaved();}));
   family.querySelector('.family-toggle')?.addEventListener('click',event=>{
-    const open=family.classList.toggle('open');
-    event.currentTarget.setAttribute('aria-expanded',open?'true':'false');
-    event.currentTarget.textContent=open?'Variants ▴':'Variants ▾';
+    openVariantDialog(family,event.currentTarget);
   });
 });
 document.querySelectorAll('.model-row .arch-check').forEach(box=>box.addEventListener('change',markUnsaved));
+
+const variantOverlay=document.getElementById('modelVariantOverlay');
+const variantList=document.getElementById('modelVariantList');
+const variantCount=document.getElementById('modelVariantCount');
+let activeVariantFamily=null;
+let activeVariantTrigger=null;
+
+function refreshVariantCount(){
+  if(!activeVariantFamily) return;
+  const items=[...activeVariantFamily.querySelectorAll('.arch-check')];
+  variantCount.textContent=`${items.filter(item=>item.checked).length} of ${items.length} selected`;
+}
+
+function openVariantDialog(family,trigger){
+  if(!variantOverlay.hidden) closeVariantDialog();
+  activeVariantFamily=family;
+  activeVariantTrigger=trigger;
+  document.getElementById('modelVariantTitle').textContent=`${family.dataset.family} variants`;
+  variantList.replaceChildren();
+  family.querySelectorAll('.arch-check').forEach(original=>{
+    const label=document.createElement('label');
+    label.className='variant-dialog-option';
+    const checkbox=document.createElement('input');
+    checkbox.type='checkbox';
+    checkbox.checked=original.checked;
+    const name=document.createElement('span');
+    name.textContent=original.closest('.choice')?.querySelector('span')?.textContent || original.value;
+    checkbox.addEventListener('change',()=>{
+      original.checked=checkbox.checked;
+      original.dispatchEvent(new Event('change',{bubbles:true}));
+      refreshVariantCount();
+    });
+    label.append(checkbox,name);
+    variantList.append(label);
+  });
+  refreshVariantCount();
+  trigger.setAttribute('aria-expanded','true');
+  variantOverlay.hidden=false;
+  document.body.classList.add('variant-dialog-active');
+  document.getElementById('modelVariantClose').focus();
+}
+
+function closeVariantDialog(){
+  if(variantOverlay.hidden) return;
+  variantOverlay.hidden=true;
+  document.body.classList.remove('variant-dialog-active');
+  activeVariantTrigger?.setAttribute('aria-expanded','false');
+  const returnFocus=activeVariantTrigger;
+  activeVariantTrigger=null;
+  activeVariantFamily=null;
+  variantList.replaceChildren();
+  returnFocus?.focus();
+}
+
+function setActiveFamilyVariants(value){
+  if(!activeVariantFamily) return;
+  activeVariantFamily.querySelectorAll('.arch-check').forEach(box=>{box.checked=value;});
+  variantList.querySelectorAll('input[type="checkbox"]').forEach(box=>{box.checked=value;});
+  syncFamily(activeVariantFamily);
+  refreshVariantCount();
+  markUnsaved();
+}
+document.getElementById('modelVariantSelectAll').addEventListener('click',()=>setActiveFamilyVariants(true));
+document.getElementById('modelVariantClearAll').addEventListener('click',()=>setActiveFamilyVariants(false));
+document.getElementById('modelVariantClose').addEventListener('click',closeVariantDialog);
+document.getElementById('modelVariantDone').addEventListener('click',closeVariantDialog);
+variantOverlay.addEventListener('click',event=>{if(event.target===variantOverlay) closeVariantDialog();});
+document.addEventListener('keydown',event=>{
+  if(variantOverlay.hidden) return;
+  if(event.key==='Escape'){event.preventDefault();closeVariantDialog();return;}
+  // Keep keyboard navigation within the modal while it is displayed.
+  if(event.key==='Tab'){
+    const focusable=[...variantOverlay.querySelectorAll('button,input:not([disabled])')];
+    const first=focusable[0],last=focusable[focusable.length-1];
+    if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}
+    else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
+  }
+});
+
 
 async function saveArchitectures(){
   const enabled=[...document.querySelectorAll('.arch-check:checked')].map(x=>x.value);

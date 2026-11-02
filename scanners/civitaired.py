@@ -1158,7 +1158,8 @@ def _has_ambiguous_multifile_names(versions):
     """True when distinct files in a version do not have trustworthy names.
 
     Stable file IDs are the identity. A rendered filename-authority lookup is
-    only needed when two different IDs share one name, or a name is missing.
+    needed when names are missing/repeated or carry the API's file-ID suffix.
+    This triggers an authority lookup; it never invents a replacement name.
     """
     for version in versions or []:
         if not isinstance(version, dict):
@@ -1182,6 +1183,9 @@ def _has_ambiguous_multifile_names(versions):
             ).strip()
 
             if not name:
+                return True
+
+            if file_id and re.search(r"[_-]" + re.escape(file_id) + r"\.[^.]+$", name):
                 return True
 
             key = name.casefold()
@@ -1280,7 +1284,12 @@ def _hydrated_page_tag_names(page):
 
 
 def _next_data_versions(page, model_id=None):
-    """Extract modelVersions directly from Red's __NEXT_DATA__ JSON."""
+    """Extract ordinary and devalue-encoded Red page version records.
+
+    Current pages serialize pageProps.trpcState as a flattened JSON string.
+    Decode it before traversing; scanning HTML for modelVersions cannot resolve
+    those integer references or recover their per-file creator filenames.
+    """
     text = str(page or "")
     match = re.search(
         r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
@@ -1291,18 +1300,32 @@ def _next_data_versions(page, model_id=None):
         return []
 
     try:
-        payload = json.loads(html.unescape(match.group(1)))
-    except Exception:
-        return []
+        payload = json.loads(match.group(1))
+    except (ValueError, TypeError):
+        try:
+            payload = json.loads(html.unescape(match.group(1)))
+        except (ValueError, TypeError):
+            return []
 
     collected = []
+    visited = set()
 
     def walk(value):
+        if isinstance(value, (dict, list)):
+            if id(value) in visited:
+                return
+            visited.add(id(value))
         if isinstance(value, dict):
             versions = value.get("modelVersions")
             if isinstance(versions, list):
-                if model_id is None or not value.get("id") or str(value.get("id")) == str(model_id):
-                    collected.extend(v for v in versions if isinstance(v, dict))
+                owner = value.get("id") or value.get("modelId")
+                if model_id is None or not owner or str(owner) == str(model_id):
+                    for version in versions:
+                        if not isinstance(version, dict):
+                            continue
+                        version_owner = version.get("modelId") or version.get("model_id")
+                        if model_id is None or not version_owner or str(version_owner) == str(model_id):
+                            collected.append(version)
             for child in value.values():
                 walk(child)
         elif isinstance(value, list):
@@ -1310,6 +1333,15 @@ def _next_data_versions(page, model_id=None):
                 walk(child)
 
     walk(payload)
+    try:
+        state = payload.get("props", {}).get("pageProps", {}).get("trpcState")
+        if isinstance(state, (str, list)):
+            walk(_devalue_decode(state))
+        elif isinstance(state, dict):
+            walk(state)
+    except (ValueError, TypeError, AttributeError, RecursionError):
+        # A malformed/unsupported state must not discard ordinary page data.
+        pass
     return _merge_version_lists([], collected)
 
 
@@ -1393,7 +1425,10 @@ def _fetch_civitai_page_versions(model_id):
         )
         if status_code != 200:
             return []
-        versions = _hydrated_page_versions(page, model_id)
+        versions = _merge_version_lists(
+            _next_data_versions(page, model_id),
+            _hydrated_page_versions(page, model_id),
+        )
         return versions
     except Exception as exc:
         debug_print("CivitAI Red shared page metadata failed:", exc)
@@ -1453,6 +1488,8 @@ def _fetch_model_page_metadata(model_id, version_id=None):
         return {}
     try:
         page_url = f"{BASE_URL}/models/{model_id}"
+        if version_id:
+            page_url += f"?modelVersionId={requests.utils.quote(str(version_id), safe='')}"
 
         response = get_with_backoff(
             session,
@@ -1543,6 +1580,10 @@ def _fetch_model_page_metadata(model_id, version_id=None):
             try:
                 next_data = json.loads(html.unescape(next_match.group(1)))
                 record = _find_model_record(next_data, model_id)
+                if not record:
+                    state = next_data.get("props", {}).get("pageProps", {}).get("trpcState")
+                    if isinstance(state, (str, list)):
+                        record = _find_model_record(_devalue_decode(state), model_id)
                 if isinstance(record, dict):
                     out["model"] = record
                     # Prefer app-router hydrated versions recovered above.
@@ -1581,7 +1622,7 @@ def _detail_files(detail, version):
         if not isinstance(file_data, dict):
             continue
         metadata = file_data.get("metadata") or {}
-        name = str(file_data.get("name") or f"civitai-red-{file_data.get('id', '')}")
+        name = str(file_data.get("name") or metadata.get("filename") or f"civitai-red-{file_data.get('id', '')}")
         file_id = file_data.get("id") or file_data.get("fileId") or file_data.get("file_id")
         url = str(file_data.get("downloadUrl") or file_data.get("url") or "")
         if version_id and file_id:
@@ -1597,6 +1638,8 @@ def _detail_files(detail, version):
             size_bytes = 0
         files.append({
             "name": name,
+            "original_filename": name,
+            "source_primary": file_data.get("primary") if isinstance(file_data.get("primary"), bool) else None,
             "path": f"{version_name}/{name}",
             "primary": bool(file_data.get("primary")) or name.lower().endswith((".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".gguf", ".zip", ".json")),
             "size": raw_size_kb,
@@ -1920,6 +1963,9 @@ def _build_model(item, enrich=True):
     if not files:
         files = _detail_files(detail, version)
 
+    from filename_recovery import retain_verified_names, saved_red_names
+    files = retain_verified_names(files, saved_red_names(model_id))
+
     # Keep each version's own gallery. CivitAI/Red switch previews when the
     # selected version changes, so flatten them into model_media with version
     # identity in metadata; gallery.js can filter them client-side.
@@ -1959,7 +2005,8 @@ def _build_model(item, enrich=True):
         model.architecture = processors.classify_qwen_image_21(
             base_model, name, " ".join(listing_tags)
         )
-    model.model_type = _model_type(item.get("type"), text)
+    authoritative_type = item.get("type") or page_model.get("type") or mirror_detail.get("type")
+    model.model_type = _model_type(authoritative_type, text)
     tag_names = list(listing_tags)
     mirror_tags = _tag_names_from_value(mirror_detail.get("tags") or mirror_detail.get("tagNames") or [])
     resolved_tags = []
@@ -2004,7 +2051,7 @@ def _build_model(item, enrich=True):
     model.sensitive = bool(item.get("nsfw")) or sensitive_level
     model.card_data = {
         "civitai_red_id": model_id,
-        "type": item.get("type"),
+        "type": authoritative_type,
         "nsfw": item.get("nsfw"),
         "nsfw_level": nsfw_level,
         "availability": item.get("availability"),

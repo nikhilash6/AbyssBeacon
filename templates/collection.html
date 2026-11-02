@@ -1,14 +1,25 @@
+{% macro installs(rows,title) %}
+    {% if rows %}<details class="collection-installs"><summary>{{ title }} ({{ rows|length }})</summary>
+    {% for row in rows %}<p><strong>{{ row.filename }}</strong>
+        <span>{{ row.version_name or row.version_id or 'Version not recorded' }} · {{ 'Matches current source file' if row.matches_current else 'Current file match unconfirmed' }}{% if row.installed_at %} · Installed {{ row.installed_at[:10] }}{% endif %}</span>
+        <button type="button" class="recorded-path-button" data-open-record="installed/{{ row.id }}" title="Open storage location">{{ row.local_path }}</button>
+        {% if row.review_id %}<button type="button" class="collection-remove" data-review="{{ row.review_id }}">Delete local file…</button>{% endif %}
+        <span role="status"></span></p>{% endfor %}
+    </details>{% endif %}
+{% endmacro %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{{ url_for('static',filename='css/components/detail.css') }}">
     <title>{{ title }} · AbyssBeacon</title>
 
     <link rel="stylesheet" href="{{ url_for('static', filename='css/reset.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components/collection.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/components/download.css', v='rc5') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components/gallery.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components/fullscreen.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/navbar/layout.css') }}">
@@ -18,14 +29,29 @@
     <script src="{{ url_for('static', filename='js/gallery.js') }}" defer></script>
     <script src="{{ url_for('static', filename='js/fullscreen.js') }}" defer></script>
     <script src="{{ url_for('static', filename='js/collection_readmes.js') }}" defer></script>
-    <script src="{{ url_for('static', filename='js/collection.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='js/collection.js', v='rc14') }}" defer></script>
+<style>
+    #collectionModelCardContent:empty { display:none }
+    #collectionModelCard:has(#collectionModelCardContent:empty) {padding-block: .75rem}
+    #collectionModelCard:has(#collectionModelCardContent:empty) .collection-section-kicker {display:none}
+    .collection-install-options {margin:.5rem 0;color:var(--collection-source-color)}
+    .collection-install-options label {display:inline-block;margin:.5rem}
+    .collection-page .recorded-path-button,.collection-remove {background:transparent;color:#78e3e9;border:0;font:inherit;text-align:left;cursor:pointer;overflow-wrap:anywhere}
+    .collection-page .recorded-path-button:hover {text-decoration:underline}
+    .collection-remove {color:#ffa2ad}
+    .collection-installs {padding:1rem;border-top:1px solid #27404a}
+    .collection-installs p {display:grid;gap:.4rem;margin:.9rem 0}
+    #collectionDelete { margin-top:20px }
+    </style>
 </head>
 <body class="collection-page" data-access-status="{{ collection_access_status }}" style="--collection-source-color: {{ source_color }}">
     {% include "components/navbar.html" %}
     <main class="collection-shell">
         <section class="collection-hero">
             <div class="collection-kicker">{{ collection_type }} Collection</div>
-            <h1>{{ title }}</h1>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem"><h1>{{ title }}</h1>
+                <button type="button" class="collection-family-favorite{% if repository_favorite %} is-favorite{% endif %}" data-subject="repository" data-favorite-url="{{ url_for('model_favorite',model_id=model_id) }}" aria-label="Favorite repository" aria-pressed="{{ 'true' if repository_favorite else 'false' }}" title="Favorite repository">{{ '★' if repository_favorite else '☆' }}</button>
+            </div>
             <div class="collection-meta-row">
                 {% if author %}<a class="collection-author" href="/creator/{{ author|urlencode }}">{{ author }}</a>{% endif %}
                 {% if architecture %}<span>{{ architecture }}</span>{% endif %}
@@ -51,6 +77,7 @@
             {% endif %}
         </section>
 
+        {{ installs(unmatched_installs,"Installed files without a matching family") }}
         {% if collection_readmes %}
         <section class="collection-section collection-model-card" id="collectionModelCard">
             <div class="collection-section-heading">
@@ -124,14 +151,12 @@
                 </div>
                 <div class="collection-family-heading-actions">
                     <span>Grouped from repository files</span>
-                    {% if groups %}
-                    <button type="button" id="collectionExpandAll" class="collection-expand-all" aria-pressed="false">Expand all</button>
-                    {% endif %}
+
                 </div>
             </div>
 
-            {% if groups %}
-            <div class="collection-family-tools">
+            {% if family_count %}
+            <div class="collection-family-tools" id="collectionFamilyTools">
                 <label class="collection-search-label" for="collectionFamilySearch">Search this collection</label>
                 <div class="collection-search-row">
                     <input
@@ -139,12 +164,13 @@
                         class="collection-search-input"
                         type="search"
                         placeholder="Search families, variants, or filenames..."
-                        autocomplete="off"
+                        autocomplete="off" value="{{ collection_query }}"
                     >
+                    <button type="button" id="collectionSearchSubmit" class="collection-expand-all">Search</button>
                     {% if collection_change_summary.has_changes %}
                     <button type="button" id="collectionChangesOnly" class="collection-changes-only" aria-pressed="false">Show changes</button>
                     {% endif %}
-                    <span id="collectionSearchCount" class="collection-search-count">{{ family_count }} shown</span>
+                    <span id="collectionSearchCount" class="collection-search-count">{{ collection_start }}–{{ collection_end }} of {{ collection_match_count }}</span>
                 </div>
                 {% if source == 'modelscope' and collection_tags %}
                 <div class="collection-repository-tags" aria-label="ModelScope repository tags">
@@ -162,16 +188,17 @@
                     {% endfor %}
                     {% if source == 'huggingface' %}
                     <span class="collection-sort-divider" aria-hidden="true"></span>
-                    <div class="collection-family-sort" aria-label="Sort Collection families">
-                        <button type="button" class="collection-sort-button" data-sort="new" aria-pressed="false" title="Newest families first">New</button>
-                        <button type="button" class="collection-sort-button" data-sort="updated" aria-pressed="false" title="Recently changed families first">Updated</button>
-                        <button type="button" class="collection-sort-button" data-sort="alpha" aria-pressed="true" title="Alphabetical order">A–Z</button>
-                    </div>
+
                     {% endif %}
                 </div>
                 {% endif %}
+                <div class="collection-expand-row">                    <div class="collection-family-sort" aria-label="Sort Collection families">
+                        <button type="button" class="collection-sort-button" data-sort="new" aria-pressed="false" title="Newest families first">New</button>
+                        <button type="button" class="collection-sort-button" data-sort="updated" aria-pressed="false" title="Recently changed families first">Updated</button>
+                        <button type="button" class="collection-sort-button" data-sort="alpha" aria-pressed="true" title="Alphabetical order">A–Z</button>
+                    </div><button type="button" id="collectionExpandAll" class="collection-expand-all">Expand this page</button></div>
             </div>
-
+            {% include "components/collection_pagination.html" %}
             <div class="collection-grid" id="collectionFamilyGrid">
                 {% for group in groups %}
                 <details id="{{ group.dom_id }}" class="collection-child-card" data-family-search="{{ group.search_text|e }}" data-family-alpha="{{ group.alpha_buckets|join(' ') }}" data-family-changed="{{ 'true' if group.change_badges else 'false' }}" data-family-first-seen="{{ group.first_seen|e }}" data-family-updated-at="{{ group.updated_at|e }}">
@@ -209,12 +236,13 @@
                         </div>
                     </summary>
 
+                    {{ installs(group.installed_rows, "Installed versions") }}
                     <div class="collection-file-list">
                         {% for file in group.files %}
                         <div id="{{ file.dom_id }}" class="collection-file-row">
                             <div class="collection-file-topline">
                                 <div class="collection-file-info">
-                                    <strong>{{ file.name or file.path }}</strong>
+                                    {% if file.installed %}<span style="color:#78e3e9">✓ {{ file.name or file.path }}</span>{% else %}<strong>{{ file.name or file.path }}</strong>{% endif %}
                                     <div>
                                         {% if file.variant_label %}<span>{{ file.variant_label }}</span>{% endif %}
                                         {% if file.size_display %}<span>{{ file.size_display }}</span>{% endif %}
@@ -228,6 +256,13 @@
                                     <a class="collection-download" href="{{ file.download_url }}" title="Download {{ 'workflow' if group.artifact_type == 'Workflow' else 'model' }} file: {{ file.name or file.path }}" aria-label="Download {{ 'workflow' if group.artifact_type == 'Workflow' else 'model' }} file {{ file.name or file.path }}">↓</a>
                                 </div>
                             </div>
+                            {% if preferences.get('download_behavior') == 'local' %}
+                            <details class="collection-install-options"><summary>Install options</summary>
+                                <label>Model type <select name="install_category"><option value="">Use saved or detected type</option>{% for key,label in install_types.items() %}<option value="{{ key }}" {% if key == file.suggested_type %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+                                <label>Destination folder <input name="install_folder" placeholder="Default for this type"></label>
+                                <span role="status"></span>
+                            </details>
+                            {% endif %}
                             {% if file.preview_refs %}
                             <div class="collection-file-preview-block">
                                 <div class="collection-file-preview-heading">
@@ -277,14 +312,15 @@
                 </details>
                 {% endfor %}
             </div>
-            <div id="collectionSearchEmpty" class="collection-empty" hidden>No families match this search.</div>
+            {% include "components/collection_pagination.html" %}
+            <div id="collectionSearchEmpty" class="collection-empty" {% if groups %}hidden{% endif %}>No families match this search.</div>
             {% else %}
             <div class="collection-empty">No downloadable model families could be grouped from this repository yet.</div>
             {% endif %}
         </section>
 
         {% if repository_files %}
-        <section class="collection-section collection-repository-files-section">
+        <section id="repositoryFiles" class="collection-section collection-repository-files-section">
             <details class="collection-repository-files">
                 <summary>
                     <div>
@@ -309,9 +345,15 @@
                     </div>
                     {% endfor %}
                 </div>
+                {% if repository_pages > 1 %}<nav class="collection-pagination">{% if repository_page > 1 %}<a href="{{ repository_previous }}">Previous files</a>{% endif %}<span>Page {{ repository_page }} of {{ repository_pages }}</span>{% if repository_page < repository_pages %}<a href="{{ repository_next }}">Next files</a>{% endif %}</nav>{% endif %}
             </details>
         </section>
         {% endif %}
+        <section id="collectionDelete" class="model-delete-section" data-model-id="{{ model_id }}">
+            <button type="button" class="delete-model-card">Delete collection card</button>
+            <p>Remove this collection and its source entries. Downloaded files stay on disk.</p>
+            <div class="delete-card-confirmation-status" hidden><span></span> <button type="button" class="restore-delete-card-confirmation">Ask before deleting again</button></div>
+        </section>
     </main>
 
     <button id="collectionBackToTop" class="back-to-top" type="button" aria-label="Back to top" title="Back to top">↑ Top</button>
@@ -365,8 +407,6 @@
                         <div class="media-metadata-head">
                             <strong>Metadata</strong>
                             <div class="media-metadata-controls">
-                                <button type="button" class="media-metadata-toggle">More</button>
-                                <button type="button" class="media-metadata-hide" title="Hide metadata">×</button>
                             </div>
                         </div>
                         <div class="media-metadata-body"></div>
@@ -418,10 +458,19 @@
     <script src="{{ url_for('static', filename='js/scanner.js') }}"></script>
     <script src="{{ url_for('static', filename='js/search_sources.js') }}"></script>
     <script src="{{ url_for('static', filename='js/discovery.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/filters.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/navbar.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/modal.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/filters.js', v='v2-onboarding') }}"></script>
+    <script src="{{ url_for('static', filename='js/navbar.js', v='rc9') }}"></script>
+    <script src="{{ url_for('static', filename='js/install_destination.js', v='rc5') }}"></script>
+    <script src="{{ url_for('static', filename='js/modal.js', v='collection-delete-1') }}"></script>
     <script src="{{ url_for('static', filename='js/settings.js') }}"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script>
+        window.modelRadarInitCardDeletion(document.getElementById("collectionDelete"), () => {
+            location.replace(document.querySelector(".nav-secondary-return-button")?.href || "/");
+        });
+    </script>
+<script id="collectionPaging" type="application/json">{{ {"total":family_count,"query":collection_query,"page":collection_page,"alpha":collection_alpha,"sort":collection_sort,"changed":collection_changed,"available":available_alpha}|tojson }}</script>
+{% include "components/help_setup.html" %}
+<script src="{{ url_for('static',filename='js/help_setup.js',v='rc5') }}"></script>
 </body>
 </html>

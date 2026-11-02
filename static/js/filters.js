@@ -1012,7 +1012,7 @@ function filterCards(){
         const sources = (card.dataset.sources || card.dataset.source || "").toLowerCase().split(/\s+/).map(x=>x.replace(/\s+/g,"")).filter(Boolean);
         const arch = (card.dataset.architecture || "").toLowerCase();
         const type = (card.dataset.type || "").toLowerCase();
-        const cardStatus = (card.dataset.status || "").toLowerCase();
+        const cardStatus = window.modelRadarCardSeenStatus?.(card) || (card.dataset.status || "").toLowerCase();
         const hasMedia = card.dataset.hasMedia === "true" || card.dataset.hasMedia === "1";
         const gated = card.dataset.gated === "true" || card.dataset.gated === "1";
         const cardAccess = (card.dataset.access || (gated ? "gated" : "public")).toLowerCase();
@@ -1108,6 +1108,8 @@ function requestTrueNavbarCounts(){
     const state = navbarCountRequestState();
     const signature = JSON.stringify(state);
 
+    clearTimeout(navbarCountTimer);
+    const requestId = ++navbarCountRequestId;
     if(signature === lastNavbarCountSignature && lastNavbarCountData){
         applyNavbarCountData(lastNavbarCountData);
         return;
@@ -1115,7 +1117,6 @@ function requestTrueNavbarCounts(){
 
     clearTimeout(navbarCountTimer);
     navbarCountTimer = setTimeout(async () => {
-        const requestId = ++navbarCountRequestId;
         try{
             const url = new URL("/feed/counts", window.location.origin);
             if(state.architecture) url.searchParams.set("architecture", state.architecture);
@@ -1148,6 +1149,7 @@ function updateNavbarCounts(){
     // No filter at all: use the full totals already supplied by Flask with the
     // initial page. This is instant and never changes as chunks are appended.
     if(feed && !filtersAreActive()){
+        clearTimeout(navbarCountTimer);navbarCountRequestId++;
         applyNavbarCountData({
             total: Number(feed.dataset.totalModelCount || 0),
             new: Number(feed.dataset.totalNewCount || 0),
@@ -1180,7 +1182,8 @@ function persistPreferences(){
         .map(input => input.value);
 
     const preferences = {
-        selected_sources: sources,
+        selected_sources: sources.filter(value => value !== "local"),
+        ...(document.querySelector('input[name="sources"][value="local"]') ? {show_local_source:sources.includes("local")} : {}),
         selected_architecture: selectedArchitectureValues().length === 1 ? selectedArchitectureValues()[0] : "",
         // Scan submission updates the legacy single field independently.
         selected_feed_architectures: selectedArchitectureValues(),
@@ -1192,7 +1195,7 @@ function persistPreferences(){
         selected_creator_favorite: document.getElementById("creatorFavoriteFilter")?.value || "all",
         selected_download_status: document.getElementById("downloadStatusFilter")?.value || "all",
         // Scanner sources intentionally mirror the feed source selection.
-        selected_scan_sources: sources,
+        selected_scan_sources: sources.filter(value=>value!=="local"),
         show_media_only: document.getElementById("showMediaOnly")?.checked || false,
         selected_search: document.getElementById("modelSearch")?.value || "",
         selected_search_terms: committedSearchTerms
@@ -1241,7 +1244,7 @@ function restorePreferences(){
 
     if(Array.isArray(preferences.selected_sources)){
         document.querySelectorAll('input[name="sources"]').forEach(input => {
-            input.checked = preferences.selected_sources.includes(input.value);
+            input.checked = input.value === "local" ? preferences.show_local_source !== false : preferences.selected_sources.includes(input.value);
         });
     }
 
@@ -1296,10 +1299,11 @@ function filtersAreActive(){
     const allSources = document.querySelectorAll('input[name="sources"]').length;
     const selectedSources = document.querySelectorAll('input[name="sources"]:checked').length;
     const search=(document.getElementById("modelSearch")?.value || "").trim();
-    return Boolean(search || committedSearchTerms.length || prefs.family || prefs.type || prefs.media || prefs.status !== "all" || prefs.access !== "all" || prefs.sensitive !== "show" || prefs.favorite !== "all" || prefs.creatorFavorite !== "all" || prefs.downloadStatus !== "all" || (allSources && selectedSources !== allSources));
+    return Boolean(search || committedSearchTerms.length || prefs.family || prefs.type || prefs.media || prefs.status !== "all" || prefs.access !== "all" || prefs.favorite !== "all" || prefs.creatorFavorite !== "all" || prefs.downloadStatus !== "all" || (allSources && selectedSources !== allSources));
 }
 
 function updateFilterUI(){
+    window.modelRadarUpdateSeenAction?.();
     const active=filtersAreActive();
     document.getElementById("activeFilterDot")?.classList.toggle("hidden", !active);
     document.getElementById("clearAllSearchFilters")?.classList.toggle("hidden", !active);
@@ -1308,7 +1312,8 @@ function updateFilterUI(){
     const countEl = document.getElementById("optionsFilterCount");
     if(countEl){ countEl.textContent=String(count); countEl.classList.toggle("hidden", count===0); }
     const empty = document.getElementById("emptyFilterState");
-    if(empty) empty.classList.toggle("hidden", getVisibleCards().length !== 0 || document.querySelectorAll(".model-card").length === 0);
+    if(window.modelRadarUpdateEmptyState) window.modelRadarUpdateEmptyState();
+    else if(empty) empty.classList.toggle("hidden", getVisibleCards().length !== 0 || document.querySelectorAll(".model-card").length === 0);
 
     // Navbar labels use one interaction language: white at rest, cyan on
     // hover/focus. The filter pill itself already communicates active state.
@@ -1358,20 +1363,21 @@ function normalizeSeenCards(cards){
 async function applySeenState(cards,{changed=null,all=false,refreshNewWindow=true}={}){
     const normalized=normalizeSeenCards(cards);
     const newlySeen=normalized.filter(card=>String(card.dataset.status || "").toLowerCase() === "new");
+    const scope=all ? [] : selectedArchitectureValues().map(v=>v.toLowerCase());
     normalized.forEach(card=>{
-        card.dataset.status="seen";
-        card.querySelector(".badge-new")?.remove();
+        try{
+            const states=JSON.parse(card.dataset.architectureStates || '{}');
+            Object.keys(states).forEach(name=>{if(!scope.length || scope.includes(name.toLowerCase()))states[name]=true;});
+            card.dataset.architectureStates=JSON.stringify(states);
+            card.querySelectorAll('.badge.architecture').forEach(badge=>{
+                if(!scope.length || scope.includes(String(badge.dataset.architectureName || '').toLowerCase()))badge.querySelector('.architecture-new')?.remove();
+            });
+        }catch(_){}
+        card.dataset.status=window.modelRadarCardSeenStatus?.(card) || 'seen';
     });
     const effectiveChanged=changed == null ? newlySeen.length : Math.max(0,Number(changed || 0));
-    updateWindowedNewTotal(effectiveChanged,{all});
-    filterCards();
-    if(refreshNewWindow && String(document.getElementById("statusFilter")?.value || "").toLowerCase() === "new"){
-        newlySeen.forEach(card=>{
-            window.modelRadarReleaseCardVideoPreviews?.(card);
-            card.remove();
-        });
-        await window.modelRadarReconcileFeedWindow?.(effectiveChanged,{all});
-    }
+    if(refreshNewWindow && window.modelRadarRefreshSeenState)await window.modelRadarRefreshSeenState();
+    else filterCards();
     return {cards:normalized,newlySeen,changed:effectiveChanged};
 }
 
@@ -1389,7 +1395,7 @@ async function markModelIdsSeen(ids){
     const response = await fetch("/models/mark-seen", {
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({ids:uniqueIds})
+        body:JSON.stringify({ids:uniqueIds, architectures:selectedArchitectureValues()})
     });
 
     const data = await response.json();
@@ -1405,98 +1411,7 @@ window.modelRadarApplySeenState = applySeenState;
 window.modelRadarMarkModelIdsSeen = markModelIdsSeen;
 
 function requestMarkSeen(mode){
-    const allMode = mode === "all";
-    const cards = allMode
-        ? Array.from(document.querySelectorAll(".model-card"))
-        : getVisibleCards().filter(card=>{
-            const rect=card.getBoundingClientRect();
-            return rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight;
-        });
-
-    const newCards = cards.filter(
-        card => (card.dataset.status || "").toLowerCase() === "new"
-    );
-
-    const feed = document.getElementById("modelFeed");
-    const trueNewCount = Number(
-        feed?.dataset.totalNewCount
-        || document.getElementById("newCountValue")?.textContent
-        || 0
-    );
-
-    if(!allMode && !newCards.length) return;
-    if(allMode && trueNewCount <= 0) return;
-
-    const execute = async () => {
-        const response = await fetch("/models/mark-seen", {
-            method:"POST",
-            headers:{"Content-Type":"application/json"},
-            body:JSON.stringify(
-                allMode
-                    ? {all:true}
-                    : {ids:newCards.map(card => card.dataset.id)}
-            )
-        });
-
-        const data = await response.json();
-        if(!response.ok || !data.success){
-            throw new Error(data.error || "Unable to mark models as seen.");
-        }
-
-        const changed = Number(data.changed || 0);
-        const cardsToUpdate = allMode
-            ? Array.from(document.querySelectorAll('.model-card[data-status="new"]'))
-            : newCards;
-
-        await applySeenState(
-            cardsToUpdate,
-            {
-                changed,
-                all:allMode,
-                refreshNewWindow:true
-            }
-        );
-    };
-
-    if(!allMode){
-        execute().catch(error => console.error("Mark Visible as Seen failed:", error));
-        return;
-    }
-
-    if(localStorage.getItem("modelradar_skip_seen_confirmation") === "1"){
-        execute().catch(error => console.error("Mark All as Seen failed:", error));
-        return;
-    }
-
-    const overlay=document.getElementById("seenConfirmOverlay");
-    const text=document.getElementById("seenConfirmText");
-    const accept=document.getElementById("seenConfirmAccept");
-    const cancel=document.getElementById("seenConfirmCancel");
-    const check=document.getElementById("seenConfirmDontAsk");
-
-    if(text){
-        text.textContent = `This will mark all ${trueNewCount} new models in your library as seen.`;
-    }
-
-    overlay?.classList.add("open");
-    overlay?.setAttribute("aria-hidden","false");
-    if(check) check.checked=false;
-
-    const close=()=>{
-        overlay?.classList.remove("open");
-        overlay?.setAttribute("aria-hidden","true");
-    };
-
-    if(cancel) cancel.onclick=close;
-    if(accept){
-        accept.onclick=()=>{
-            if(check?.checked){
-                localStorage.setItem("modelradar_skip_seen_confirmation","1");
-            }
-            close();
-            execute().catch(error => console.error("Mark All as Seen failed:", error));
-        };
-    }
+    return window.modelRadarRequestMarkSeen?.(mode === "all" ? "library" : "architectures");
 }
 
 // A return from an artist/collection restores this tab's feed, not another
@@ -1533,3 +1448,8 @@ document.addEventListener("DOMContentLoaded",()=>{
         input.addEventListener("change",sync);sync();
     });
 });
+
+window.modelRadarInvalidateSeenCounts=()=>{
+    lastNavbarCountSignature="";lastNavbarCountData=null;navbarCountRequestId++;
+    requestTrueNavbarCounts();
+};

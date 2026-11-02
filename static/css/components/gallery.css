@@ -387,3 +387,21 @@
 /* Leave room inside the horizontal scrollport for rounded borders/focus rings.
    The selected accent is inset so it cannot be cut into a flat edge. */
 .detail-version-nav .model-version-row { padding:10px; box-sizing:border-box; }
+
+/* Generation settings remain readable; prompts and raw graphs expand separately. */
+.media-metadata-card .media-meta-value{display:block!important;-webkit-line-clamp:unset!important;overflow:visible!important}
+.media-meta-section{margin-top:9px;padding-top:7px;border-top:1px solid rgba(0,234,255,.18);font-size:12px}
+.media-meta-section summary{cursor:pointer;color:#67e9f6;padding:4px 0}
+.media-meta-prompt{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:11px;line-height:1.5;margin:8px 0;max-height:260px;overflow:auto}
+.media-meta-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.media-meta-action{background:#080808;color:#00eaff;border:1px solid rgba(0,234,255,.35);border-radius:16px;padding:5px 9px;font-size:11px;cursor:pointer;margin:4px 4px 4px 0}
+.media-meta-action:focus-visible,.media-meta-section summary:focus-visible{outline:2px solid #00eaff;outline-offset:2px}
+.media-meta-note{font-size:11px;color:#b6c6ca;line-height:1.5;margin:8px 0}
+
+.media-metadata-controls .media-meta-image-download{flex-shrink:0;margin:0;padding:5px 4px;min-height:24px;font-size:11px;line-height:1.3;white-space:nowrap;border:0;border-radius:3px;background:transparent;color:#00eaff;box-shadow:none}
+.media-metadata-controls .media-meta-image-download:hover{color:#a6f8ff;text-decoration:underline;background:transparent}
+.media-metadata-controls{flex-shrink:0}
+
+/* Reserve the lower corner for the single metadata visibility toggle. */
+.media-metadata-card{padding-bottom:46px}
+.media-metadata-restore.visible{display:block}

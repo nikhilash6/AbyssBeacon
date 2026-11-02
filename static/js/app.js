@@ -5,6 +5,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initializeNavbar();
     initializeSettings();
     initializeModal();
+    window.AbyssCivitaiAuthChecks?.init();
     initializeGallery();
     initializeFullscreen();
     initializeBackToTop();

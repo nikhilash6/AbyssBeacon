@@ -1,0 +1,40 @@
+{% macro review_select(file) -%}
+<select class="library-review-state" aria-label="Review state for {{ file.filename }}" data-state-id="{{ file.id }}" data-saved="{{ file.review_state }}">
+  {% for value,label in [('unsorted','Unsorted'),('not_tried','Not tried'),('keep','Keep')] %}<option value="{{ value }}"{% if file.review_state==value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+</select>
+{%- endmacro %}
+    {% for group in groups %}
+      <section class="downloaded-group" data-group-key="{{ group.key }}">
+        {% if group.model %}{% set model=group.model %}{% include 'components/model_card.html' %}
+        {% else %}<div class="downloaded-missing-card"><h2>{{ group.files[0].model_name or group.files[0].filename }}</h2><p>This model card is no longer in the library. Your file decisions are preserved below.</p></div>{% endif %}
+        {% if group.model %}
+        <div class="downloaded-quick-controls">
+          {% if group.files|length == 1 %}{% set quick=group.files[0] %}
+          {{ review_select(quick) }}
+          <button type="button" data-quick-review="{{ quick.id }}" data-review-field="personal_tags" title="{{ quick.personal_tags|join(', ') or 'Add personal tags' }}">{{ quick.personal_tags|join(' · ') or '+ Tags' }}</button>
+          {% else %}<button type="button" data-review-files>Review {{ group.files|length }} files</button>{% endif %}
+        </div>
+        {% endif %}
+        <div class="downloaded-files">
+        {% for file in group.files %}
+          <details class="downloaded-file" {% if group.files|length == 1 %}open{% endif %}>
+            <summary><span>{% if file.filename %}<strong style="display:block;overflow-wrap:anywhere">{{ file.filename }}</strong>{% endif %}{{ file.architecture_label }} · {{ file.install_type_label }} · {{ file.version_name or file.version_id or "Downloaded file" }} · {{ file.source }}</span></summary>
+            {% if not group.model or group.files|length > 1 %}{{ review_select(file) }}{% endif %}
+            <div class="downloaded-file-actions">{% if file.tracked %}<button type="button" data-open-record="review/{{ file.id }}">Open folder</button>{% endif %}<button type="button" class="downloaded-copy-name" data-filename="{{ file.filename }}">Copy name</button>{% if not file.tracked %}<button type="button" data-forget-review="{{ file.id }}">Forget this entry…</button>{% endif %}{% if file.tracked %}<button type="button" class="downloaded-delete-file" data-review-id="{{ file.id }}">Delete local file…</button>{% endif %}<span role="status"></span></div>
+            {% if file.extension_unresolved %}<p>File extension needs review. Open Library maintenance → Older download repairs → Repair SeaArt filenames; you can open the source model while deciding.</p>{% endif %}
+            <details class="downloaded-extra"><summary>File details</summary><div class="downloaded-file-info">{% if file.verified_sha256 %}
+              <span>Location: SHA-256 verified · <code style="overflow-wrap:anywhere;user-select:all">{{ file.verified_sha256 }}</code></span>
+            {% elif file.location_updated_at %}<span>Location: User-confirmed</span>{% endif %}{% if file.tracked and file.location_state=="missing" %}<p>File not found at the recorded location. Open Storage location to locate it or mark it as not installed.</p>{% elif file.tracked and file.location_state=="unavailable" %}<p>Location unavailable. Check that the drive is connected before changing installed status.</p>{% endif %}<span>{{ file.source }} · {{ file.version_name or file.version_id or 'Version not recorded' }}</span>{% if file.import_date_source %}<span>Recorded install: {{ file.completed_at[:10] }} · {{ file.import_date_source }}</span>{% elif file.imported_at and not file.completed_at %}<span>Imported {{ file.imported_at[:10] }} · Download date unknown</span>{% else %}<time datetime="{{ file.completed_at }}">{{ file.completed_at }}</time>{% endif %}<details class="downloaded-storage-path" data-location-review-id="{{ file.id }}"><summary>Storage location</summary><p class="downloaded-location-status" role="status">Open to check the recorded path.</p><p>{{ file.filename }}</p><div class="installed-location-row"><button type="button" class="recorded-path-button" data-open-record="review/{{ file.id }}">{{ file.local_path }}</button></div><div class="downloaded-file-actions"><button type="button" class="downloaded-locate-file" data-review-id="{{ file.id }}" data-path="{{ file.local_path }}" data-filename="{{ file.filename }}">Locate file…</button>{% if file.tracked %}<button type="button" class="downloaded-untrack-file" data-review-id="{{ file.id }}" data-path="{{ file.local_path }}">Remove download record…</button>{% endif %}<span role="status"></span></div></details>{% if file.uninstalled_at and not file.tracked %}<p>Marked as not installed. Files and review history kept.</p>{% elif file.deleted_at %}<p>Local file deleted. Review and download history retained.</p>{% elif not file.tracked %}<p>Historical file/version — no longer tracked as installed at this path.</p>{% endif %}</div>
+            </details>
+            {% if file.personal_tags %}<p class="downloaded-personal-tags">{{ file.personal_tags|join(" · ") }}</p>{% endif %}
+            <details class="downloaded-review-editor"><summary>Edit personal tags</summary>
+            <form class="downloaded-edit" data-review-id="{{ file.id }}">
+
+              <label>Personal tags<input name="personal_tags" value="{{ file.personal_tags|join(', ') }}" placeholder="armor, lighting"></label>
+              <button type="submit">Save</button><span role="status"></span>
+            </form></details>
+          </details>
+        {% endfor %}
+        </div>
+      </section>
+    {% else %}{% if page == 1 %}<p class="downloaded-empty">{% if library_empty and not past %}<strong>No models linked yet</strong><br>Download a model through AbyssBeacon or link one you already have to start your journey into the Abyss.<br><button type="button" data-open-import>Add existing model files</button> <a href="/">Browse models</a>{% else %}No downloaded files match this view. <a href="/downloaded">Clear filters</a>{% endif %}</p>{% endif %}{% endfor %}

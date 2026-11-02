@@ -410,6 +410,10 @@ DOWNLOAD OVERLAY
 /* =========================
    VERSION-AWARE DOWNLOADS
 ========================= */
+/* A version's sign-in requirement is separate from paid / early-access state. */
+.download-source-state.signin-required,.download-signin-note.required{color:#ffc16b}
+.download-source-state.signin-possible,.download-signin-note.possible{color:#d8c68b}
+.download-signin-note{font-size:.77rem;line-height:1.5;margin:8px 12px;padding:9px 11px;background:rgba(216,198,139,.055);border:1px solid rgba(216,198,139,.23);border-radius:8px}
 .download-source-state.early-access{color:#ffd166}
 .download-version-list{display:flex;flex-direction:column;gap:10px}
 .download-version-group{border:1px solid rgba(255,255,255,.08);border-radius:10px;overflow:hidden;background:rgba(0,0,0,.16)}
@@ -484,3 +488,36 @@ DOWNLOAD OVERLAY
 }
 
 .download-paid-access-note,.paid-access-note{margin:.6rem 0;padding:.7rem .85rem;border:1px solid rgba(255,92,138,.32);border-radius:12px;background:rgba(255,92,138,.06);color:#ffc2d3}.download-paid-access-note{display:flex;align-items:center;justify-content:space-between;gap:12px}
+
+/* Full repository paths remain readable on narrow download choosers. */
+.download-original-path { overflow-wrap:anywhere; }
+
+.downloaded-review-row{padding:14px 0;border-bottom:1px solid rgba(0,234,255,.18);display:grid;gap:6px}
+.downloaded-review-row small,.downloaded-review-help,#downloadedReviewCount{color:#9cb4bb;font-size:12px;line-height:1.5}
+.downloaded-review-path{overflow-wrap:anywhere;font-size:12px;color:#c3d5da}
+.downloaded-review-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
+.downloaded-review-controls input{flex:1;min-width:160px;background:#080f12;color:#ddd;border:1px solid #325059;border-radius:8px;padding:8px}
+.downloaded-review-controls select,.downloaded-review-controls button,#downloadedReviewMore{background:#080f12;color:#00eaff;border:1px solid #325059;border-radius:12px;padding:8px;cursor:pointer}
+.downloaded-review-controls :focus-visible,#downloadedReviewMore:focus-visible{outline:2px solid #00eaff;outline-offset:2px}
+.downloaded-review-controls [role=status]{font-size:12px;color:#b6d0d6}
+
+.downloaded-library-link{display:inline-block;align-self:flex-start;margin:8px 0 14px;color:#00eaff;font-size:14px;text-decoration:none}
+.downloaded-library-link:hover{text-decoration:underline}
+
+.file-install-options {flex-basis:100%;padding:.5rem;font-size:.85rem;}
+.file-install-options summary {cursor:pointer;color:#00eaff;}
+.file-install-options label {display:flex;gap:.5rem;align-items:center;margin:.6rem 0;flex-wrap:wrap;}
+.file-install-options input[type=text] {width:100%;} .file-install-options p {overflow-wrap:anywhere;}
+
+.download-file.has-install-options {flex-wrap:wrap;}
+.download-file.has-install-options > .download-file-info {flex:1;min-width:0;}
+
+.abyss-destination-dialog {box-sizing:border-box;width:min(620px,94vw);max-height:90vh;overflow:auto;padding:1.5rem;background:#09191e;color:#d3eaf4;border:1px solid #25849a;border-radius:18px;box-shadow:0 18px 70px #000a;}
+.abyss-destination-dialog::backdrop {background:#000b;}
+.abyss-destination-dialog h2 {margin-top:0;}
+.abyss-destination-dialog label {display:block;margin:1rem 0;}
+.abyss-destination-dialog input[type=text],.abyss-destination-dialog select {display:block;box-sizing:border-box;width:100%;margin-top:.4rem;padding:.65rem;background:#061216;color:#e5f5ff;border:1px solid #32606c;border-radius:7px;}
+.abyss-destination-dialog button {padding:.65rem .9rem;background:#07161b;color:#27dff4;border:1px solid #278194;border-radius:20px;cursor:pointer;}
+.abyss-destination-dialog button:disabled {opacity:.45;cursor:default;}
+.abyss-destination-actions {display:flex;gap:.6rem;flex-wrap:wrap;margin-top:1rem;}
+.abyss-destination-dialog p {overflow-wrap:anywhere;}

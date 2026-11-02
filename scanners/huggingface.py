@@ -168,6 +168,8 @@ def _repository_file_record(model_id, filename, info=None, revision="main"):
     return {
         "name": filename.split("/")[-1],
         "path": filename,
+        "repository_path": filename,
+        "original_filename": filename.split("/")[-1],
         "size": size,
         "size_bytes": size,
         "sha256": lfs_sha,

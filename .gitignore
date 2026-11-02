@@ -36,5 +36,8 @@ venv/
 .DS_Store
 Thumbs.db
 
-# Local automated verification files are not part of app releases.
+# Local automated verification files.
 /tests/
+
+# Downloaded model files.
+/Models/

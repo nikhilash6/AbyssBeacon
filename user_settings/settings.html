@@ -157,18 +157,19 @@
         @media (max-width: 620px) {
             .setting { grid-template-columns: 1fr; gap: 10px; }
         }
-    </style>
+.page{margin:12px auto 24px!important}.page>h1{display:none}.subtitle{margin:8px 0!important}.card{padding:18px!important;margin:14px 0!important}.card h2{font-size:22px!important;margin:0 0 14px!important}.setting{padding:12px 0!important;gap:16px!important}.help{font-size:13px!important;line-height:1.45!important}.notice{font-size:13px!important;padding:12px!important;margin:10px 0!important}.scan-limits>summary{cursor:pointer;color:#dffaff;font-size:18px}.tabs{gap:8px!important}.tab{padding:10px 14px!important}.scan-footer{position:sticky;bottom:0;background:#080b10;padding:12px 0!important}
+</style>
 </head>
 <body>
 <div class="page">
-    <h1>AbyssBeacon Settings</h1>
+    <h1>Scan settings</h1>
     <p class="subtitle">Normal scan ordering is source-specific. Result limits are centralized below.</p>
     <div class="notice"><strong>Normal scans always need a stopping boundary.</strong> Use a finite result limit, or choose Unlimited while Automatic Retention is enabled so the <a class="retention-link" href="#" data-retention-link>retention window</a> becomes the boundary.</div>
 
     {% set global_limit = scan_limits.get('global_max_results', 150) %}
     {% set overrides = scan_limits.get('source_overrides', {}) %}
-    <div class="card">
-        <h2>Scan Limits</h2>
+    <details class="card scan-limits">
+        <summary>Scan limits · {{ global_limit if global_limit is not none else "Retention window" }}</summary>
         <div class="setting">
             <div>
                 <strong>Global Maximum Search Results</strong>
@@ -200,7 +201,7 @@
                 Normal scans stop at the effective result limit or the Automatic Retention day boundary, whichever comes first.
             {% endif %}
         </div>
-    </div>
+    </details>
 
     <div class="tabs">
         <button class="tab" data-panel="civitai" type="button">CivitAI</button>
@@ -218,9 +219,10 @@
         <div class="setting">
             <div>
                 <strong>Search Order</strong>
-                <div class="help">How Hugging Face orders model results before AbyssBeacon filters them.</div>
+                <div class="help">Latest Activity checks both Created and Updated, merges them, then keeps the newest unique repositories before AbyssBeacon filters them.</div>
             </div>
             <select id="hfSort">
+                <option value="latest_activity" {% if hf.get('sort') == 'latest_activity' %}selected{% endif %}>Latest Activity (Created + Updated)</option>
                 <option value="newest_updated" {% if hf.get('sort') == 'newest_updated' %}selected{% endif %}>Newest Updated</option>
                 <option value="newest_created" {% if hf.get('sort') == 'newest_created' %}selected{% endif %}>Newest Created</option>
                 <option value="downloads" {% if hf.get('sort') == 'downloads' %}selected{% endif %}>Most Downloads</option>
@@ -292,6 +294,7 @@
     {% set th = search_settings.get('tensorhub', {}) %}
     <div class="card source-panel" id="panel-tensorhub">
         <h2>Search Settings — TensorHub Art</h2>
+        <div class="setting"><div><strong>Search Order</strong><div class="help">Newest scans project publication order. Newest Updated uses TensorHub's latest-update ordering.</div></div><select id="thSort"><option value="newest" {% if th.get('sort') == 'newest' %}selected{% endif %}>Newest</option><option value="newest_updated" {% if th.get('sort') == 'newest_updated' %}selected{% endif %}>Newest Updated</option></select></div>
         <div class="notice">TensorHub Art normal architecture scans use its structured website search with exact base-model filtering and automatic pagination. Expanded Creator Search remains a separate optional pass.</div>
         <div class="setting">
             <div>
@@ -305,14 +308,24 @@
         </div>
         <div class="setting"><div><strong>Creator Recheck Cooldown</strong><div class="help">When Expanded Creator Search is enabled, a creator is checked again only after this many hours have passed since AbyssBeacon last inspected that creator for the current base model. This never starts a scan automatically; it only reduces repeated creator requests during scans you start yourself. Set 0 to recheck eligible creators on every scan.</div></div><input id="thCreatorRecheckHours" type="number" min="0" max="720" step="1" value="{{ th.get('creator_recheck_hours', 6) }}"></div>
         <div class="setting"><div><strong>Full Creator Scan Limit</strong><div class="help">Maximum projects to inspect when you explicitly run Creator Scan on a TensorHub creator. Useful for creators with hundreds of models.</div></div><input id="thCreatorScanMax" type="number" min="1" max="5000" step="20" value="{{ th.get('creator_scan_max_results', 1000) }}"></div>
-        <div class="setting"><div><strong>Search Order</strong><div class="help">Newest scans project publication order. Newest Updated uses TensorHub's latest-update ordering.</div></div><select id="thSort"><option value="newest" {% if th.get('sort') == 'newest' %}selected{% endif %}>Newest</option><option value="newest_updated" {% if th.get('sort') == 'newest_updated' %}selected{% endif %}>Newest Updated</option></select></div>
+
     </div>
 
     {% set sa = search_settings.get('seaart', {}) %}
     <div class="card source-panel" id="panel-seaart">
         <h2>Search Settings — SeaArt</h2>
-        <div class="notice">SeaArt uses its model-only search endpoint. AbyssBeacon searches enabled model families newest-first, follows result pages automatically, then loads full detail metadata for models before storing them.</div>
-        <div class="setting"><div><strong>Search Order</strong><div class="help">SeaArt integration currently uses its verified New ordering.</div></div><select id="saSort"><option value="newest" selected>Newest</option></select></div>
+        <div class="notice">SeaArt normal scans use the Models catalog with the selected Base Model filter, then load full detail metadata before storing models. Search Sources keyword searches remain separate.</div>
+        <div class="setting">
+            <div>
+                <strong>Search Order</strong>
+                <div class="help">New is recommended for finding models as soon as they appear. Hot follows SeaArt's popularity ordering. Recommended follows SeaArt's recommendation feed.</div>
+            </div>
+            <select id="saSort">
+                <option value="newest" {% if sa.get('sort', 'newest') == 'newest' %}selected{% endif %}>New</option>
+                <option value="hot" {% if sa.get('sort') == 'hot' %}selected{% endif %}>Hot</option>
+                <option value="recommended" {% if sa.get('sort') == 'recommended' %}selected{% endif %}>Recommended</option>
+            </select>
+        </div>
     </div>
 
     <div class="scan-footer">

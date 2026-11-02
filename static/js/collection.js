@@ -1,45 +1,3 @@
-// Collection-specific controls. Shared feed return lives in navbar.js.
-document.addEventListener("DOMContentLoaded", () => {
-    const copyButton = document.getElementById("collectionCopyLinkButton");
-    copyButton?.addEventListener("click", async () => {
-        if(copyButton.dataset.copying === "true") return;
-        const value = String(copyButton.dataset.copyUrl || "").trim();
-        if(!value) return;
-        const original = copyButton.textContent;
-        copyButton.dataset.copying = "true";
-        try{
-            if(navigator.clipboard?.writeText && window.isSecureContext){
-                await navigator.clipboard.writeText(value);
-            }else{
-                const textarea = document.createElement("textarea");
-                textarea.value = value;
-                textarea.setAttribute("readonly", "");
-                textarea.style.position = "fixed";
-                textarea.style.opacity = "0";
-                textarea.style.pointerEvents = "none";
-                document.body.appendChild(textarea);
-                textarea.select();
-                textarea.setSelectionRange(0, textarea.value.length);
-                const copied = document.execCommand("copy");
-                textarea.remove();
-                if(!copied) throw new Error("Clipboard copy was blocked by the browser.");
-            }
-            copyButton.textContent = "Copied!";
-            copyButton.classList.add("copied");
-            window.setTimeout(() => {
-                copyButton.textContent = original;
-                copyButton.classList.remove("copied");
-            }, 1400);
-        }catch(error){
-            console.error("Collection link copy failed:", error);
-            copyButton.textContent = "Copy failed";
-            window.setTimeout(() => { copyButton.textContent = original; }, 1600);
-        }finally{
-            delete copyButton.dataset.copying;
-        }
-    });
-});
-
 document.addEventListener("DOMContentLoaded", () => {
     const search = document.getElementById("collectionFamilySearch");
     const count = document.getElementById("collectionSearchCount");
@@ -59,139 +17,55 @@ document.addEventListener("DOMContentLoaded", () => {
     let activeAlpha = "all";
     let activeSort = "alpha";
 
-    function timestampValue(value){
-        const parsed = Date.parse(String(value || ""));
-        return Number.isFinite(parsed) ? parsed : 0;
-    }
-
-    function sortCards(){
-        if(!familyGrid || cards.length < 2) return;
-        const ordered = [...cards].sort((left, right) => {
-            if(activeSort === "new"){
-                const difference = timestampValue(right.dataset.familyFirstSeen) - timestampValue(left.dataset.familyFirstSeen);
-                if(difference) return difference;
-            }else if(activeSort === "updated"){
-                const difference = timestampValue(right.dataset.familyUpdatedAt) - timestampValue(left.dataset.familyUpdatedAt);
-                if(difference) return difference;
-            }
-            return (originalOrder.get(left) ?? 0) - (originalOrder.get(right) ?? 0);
+    const paging = JSON.parse(document.getElementById('collectionPaging').textContent);
+    function navigate(changes) {
+        const url = new URL(location.href);
+        Object.entries(changes).forEach(([key, value]) => {
+            if (value === '') url.searchParams.delete(key);
+            else url.searchParams.set(key, value);
         });
-        ordered.forEach(card => familyGrid.appendChild(card));
+        url.hash = 'collectionFamilyTools';
+        location.assign(url);
     }
-
-    function syncSortButtons(){
-        sortButtons.forEach(button => {
-            button.setAttribute("aria-pressed", button.dataset.sort === activeSort ? "true" : "false");
-        });
+    function updateExpandAllState() {
+        if (!expandAll) return;
+        const open = cards.length > 0 && cards.every(card => card.open);
+        expandAll.textContent = (open ? 'Collapse ' : 'Expand ') + (paging.total > 100 ? 'this page' : 'all');
+        expandAll.disabled = !cards.length;
     }
-
-    function visibleCards(){
-        return cards.filter(card => !card.hidden);
-    }
-
-    function updateExpandAllState(){
-        if(!expandAll) return;
-        const visible = visibleCards();
-        const allOpen = visible.length > 0 && visible.every(card => card.open);
-        expandAll.setAttribute("aria-pressed", allOpen ? "true" : "false");
-        expandAll.textContent = allOpen ? "Collapse all" : "Expand all";
-    }
-
-    function updateSearch(){
-        if(!search) return;
-        const query = String(search.value || "").trim().toLowerCase();
-        let shown = 0;
-        for(const card of cards){
-            const haystack = String(card.dataset.familySearch || "").toLowerCase();
-            const matchesQuery = !query || haystack.includes(query);
-            const alphaBuckets = String(card.dataset.familyAlpha || "").split(/\s+/).filter(Boolean);
-            const matchesAlpha = activeAlpha === "all" || alphaBuckets.includes(activeAlpha);
-            const matchesChanges = !changedOnlyActive || card.dataset.familyChanged === "true";
-            const visible = matchesQuery && matchesAlpha && matchesChanges;
-            card.hidden = !visible;
-            if(visible) shown += 1;
-        }
-        if(count) count.textContent = `${shown} shown`;
-        if(empty) empty.hidden = shown !== 0;
-        updateExpandAllState();
-    }
-
-    if(search){
-        search.addEventListener("input", updateSearch);
-    }
-
-    function syncAlphaButtons(){
-        alphaButtons.forEach(button => {
-            button.setAttribute("aria-pressed", button.dataset.alpha === activeAlpha ? "true" : "false");
-        });
-    }
-
-    const availableAlpha = new Set(
-        cards.flatMap(card => String(card.dataset.familyAlpha || "").split(/\s+/).filter(Boolean))
-    );
-    const hasUsefulAlphaFilter = Boolean(alphaFilter && availableAlpha.size >= 2);
-    if(alphaFilter) alphaFilter.hidden = !hasUsefulAlphaFilter;
-    if(searchLabel) searchLabel.hidden = !hasUsefulAlphaFilter;
-    if(search) search.hidden = !hasUsefulAlphaFilter;
-    if(count) count.hidden = !hasUsefulAlphaFilter;
-    if(searchRow) searchRow.hidden = !hasUsefulAlphaFilter && !changesOnly;
+    search?.addEventListener('keydown', event => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        const query = search.value.trim();
+        const key = 'collection-return-page-' + location.pathname;
+        if (!paging.query && query) sessionStorage.setItem(key, String(paging.page));
+        navigate({q: query, page: query ? 1 : (sessionStorage.getItem(key) || 1)});
+    });
+    document.getElementById('collectionSearchSubmit')?.addEventListener('click', () => {
+        search.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true}));
+    });
+    search?.addEventListener('search', () => {
+        if (!search.value) search.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true}));
+    });
     alphaButtons.forEach(button => {
-        const alpha = String(button.dataset.alpha || "all");
-        if(alpha !== "all"){
-            button.disabled = !availableAlpha.has(alpha);
-        }
-        button.addEventListener("click", () => {
-            if(button.disabled || activeAlpha === alpha) return;
-            activeAlpha = alpha;
-            syncAlphaButtons();
-            updateSearch();
-        });
+        button.setAttribute('aria-pressed', String(button.dataset.alpha === paging.alpha));
+        button.disabled = button.dataset.alpha !== 'all' && !paging.available.includes(button.dataset.alpha);
+        button.onclick = () => navigate({alpha:button.dataset.alpha,page:1});
     });
-    syncAlphaButtons();
-
     sortButtons.forEach(button => {
-        button.addEventListener("click", () => {
-            const requestedSort = String(button.dataset.sort || "alpha");
-            if(activeSort === requestedSort) return;
-            activeSort = requestedSort;
-            syncSortButtons();
-            sortCards();
-            updateExpandAllState();
-        });
+        button.setAttribute('aria-pressed', String(button.dataset.sort === paging.sort));
+        button.onclick = () => navigate({sort:button.dataset.sort,page:1});
     });
-    syncSortButtons();
-    sortCards();
-
-    function setChangedOnly(active, {jump=false} = {}){
-        changedOnlyActive = !!active;
-        if(jump){
-            activeAlpha = "all";
-            syncAlphaButtons();
-        }
-        if(changesOnly){
-            changesOnly.setAttribute("aria-pressed", changedOnlyActive ? "true" : "false");
-            changesOnly.textContent = changedOnlyActive ? "Show all" : "Show changes";
-        }
-        updateSearch();
-        if(jump){
-            const first = visibleCards()[0];
-            if(first){
-                first.open = true;
-                window.requestAnimationFrame(() => first.scrollIntoView({behavior:"smooth", block:"center"}));
-            }
-        }
-    }
-
-    changesOnly?.addEventListener("click", () => setChangedOnly(!changedOnlyActive));
-    viewChanges?.addEventListener("click", () => setChangedOnly(true, {jump:true}));
-    expandAll?.addEventListener("click", () => {
-        const visible = visibleCards();
-        const shouldOpen = !(visible.length > 0 && visible.every(card => card.open));
-        visible.forEach(card => { card.open = shouldOpen; });
+    changesOnly?.addEventListener('click', () => navigate({changed:paging.changed?'':'1',page:1}));
+    if (changesOnly) changesOnly.textContent = paging.changed ? 'Show all' : 'Show changes';
+    viewChanges?.addEventListener('click', () => navigate({changed:1,alpha:'all',page:1}));
+    document.querySelectorAll('.collection-page-select').forEach(select => select.addEventListener('change', event => navigate({page:event.target.value})));
+    expandAll?.addEventListener('click', () => {
+        const open = !cards.every(card => card.open);
+        cards.forEach(card => {card.open = open;});
         updateExpandAllState();
     });
-
-    cards.forEach(card => card.addEventListener("toggle", updateExpandAllState));
+    cards.forEach(card => card.addEventListener('toggle', updateExpandAllState));
     updateExpandAllState();
 
     document.querySelectorAll(".collection-family-favorite").forEach(button => {
@@ -213,10 +87,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 if(!response.ok || payload.success !== true){
                     throw new Error(payload.error || "Could not update favorite");
                 }
+                // Back and the feed snapshot can both restore pre-edit cards.
+                try { sessionStorage.setItem("abyss_feed_favorites_dirty", "1"); } catch (_) {}
                 button.setAttribute("aria-pressed", desired ? "true" : "false");
                 button.classList.toggle("is-favorite", desired);
                 button.textContent = desired ? "★" : "☆";
-                button.title = desired ? "Remove family from favorites" : "Favorite this family";
+                const subject = button.dataset.subject || "family";
+                button.title = desired ? `Remove ${subject} from favorites` : `Favorite this ${subject}`;
             }catch(error){
                 console.error("Collection family favorite failed:", error);
                 button.title = "Could not update favorite";
@@ -264,7 +141,17 @@ document.addEventListener("DOMContentLoaded", () => {
             link.dataset.installing = "true";
             link.textContent = "…";
             try{
-                const response = await fetch(link.href, {headers:{"Accept":"application/json"}});
+                const url = new URL(link.href);
+                const options = link.closest('.collection-file-row')?.querySelector('.collection-install-options');
+                if (options) {
+                    const type = options.querySelector('select').value;
+                    const folder = options.querySelector('input').value.trim();
+                    if (type) url.searchParams.set('install_category', type);
+                    if (folder) url.searchParams.set('install_folder', folder);
+                    if (type === 'AbyssBeacon-Other') url.searchParams.set('allow_other','1');
+                    options.querySelector('[role=status]').textContent = '';
+                }
+                const response = await fetch(url, {headers:{"Accept":"application/json"}});
                 const raw = await response.text();
                 let payload = {};
                 try{ payload = raw ? JSON.parse(raw) : {}; }catch(_){ }
@@ -282,6 +169,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 link.title = `Installed: ${payload.path || payload.folder || "local library"}`;
             }catch(error){
                 const message = String(error?.message || "");
+                const options = link.closest('.collection-file-row')?.querySelector('.collection-install-options');
+                if (options) {
+                    options.open = true;
+                    options.querySelector('[role=status]').textContent = message;
+                }
                 const requestMayStillBeRunning = (
                     error instanceof TypeError
                     || /networkerror|failed to fetch|load failed/i.test(message)
@@ -766,4 +658,26 @@ document.addEventListener("DOMContentLoaded", () => {
     window.addEventListener("scroll", update, {passive: true});
     button.addEventListener("click", () => window.scrollTo({top: 0, behavior: "smooth"}));
     update();
+});
+
+document.addEventListener("click", async event => {
+    const button = event.target.closest(".collection-remove");
+    if (!button || button.disabled) return;
+    button.disabled = true;
+    const status = button.parentElement.querySelector("[role=status]");
+    const url = "/api/downloaded-library/" + button.dataset.review + "/local-file";
+    try {
+        const preview = await (await fetch(url, {cache:"no-store"})).json();
+        if (!preview.success) throw new Error(preview.error || "Unable to preview deletion.");
+        const paths = preview.files.map(file => file.path);
+        if (preview.folder) paths.push("Empty folder: " + preview.folder);
+        if (!window.confirm("Delete these local files?\n\n" + paths.join("\n"))) return;
+        const result = await (await fetch(url, {method:"DELETE", headers:{"Content-Type":"application/json"},body:JSON.stringify({token:preview.token})})).json();
+        if (!result.success) throw new Error(result.error || "Deletion was incomplete. Refresh to check installed files.");
+        location.reload();
+    } catch (error) {
+        status.textContent = error.message;
+    } finally {
+        button.disabled = false;
+    }
 });

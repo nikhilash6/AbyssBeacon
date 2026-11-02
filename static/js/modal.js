@@ -1,3 +1,119 @@
+// Card deletion preferences are confined to this browser and never affect disk files.
+window.modelRadarCardDeletion = (() => {
+    const key = "abyssbeacon.cardDeleteConfirmation.v1";
+    function readPolicy(now = Date.now()) {
+        try {
+            const value = JSON.parse(localStorage.getItem(key) || "null");
+            if (value?.mode === "forever") return value;
+            if (["1h", "24h"].includes(value?.mode) && Number.isFinite(value.until) && value.until > now) return value;
+        } catch (_) {}
+        return null;
+    }
+    function savePolicy(mode, now = Date.now()) {
+        if (!["1h", "24h", "forever"].includes(mode)) return;
+        const value = {mode, until: mode === "forever" ? null : now + (mode === "1h" ? 3600000 : 86400000)};
+        try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) {}
+    }
+    function clearPolicy() { try { localStorage.removeItem(key); } catch (_) {} }
+    function confirm(card, collection = false) {
+        if (readPolicy()) return Promise.resolve({confirmed:true, skipFor:null});
+        return new Promise(resolve => {
+            const previous = document.activeElement;
+            const overlay = document.createElement("div");
+            overlay.className = "modelradar-confirm-overlay";
+            const box = document.createElement("div");
+            box.className = "modelradar-confirm-box delete-card-dialog";
+            box.setAttribute("role", "dialog"); box.setAttribute("aria-modal", "true");
+            box.setAttribute("aria-labelledby", "deleteCardDialogTitle");
+            box.setAttribute("aria-describedby", "deleteCardDialogDescription");
+            const title = document.createElement("h3");
+            title.id = "deleteCardDialogTitle"; title.textContent = collection ? "Delete collection card?" : "Delete model card?";
+            const body = document.createElement("p"); body.id = "deleteCardDialogDescription";
+            const sources = card.sources.map(source => source.source).join(", ") || card.source;
+            body.textContent = `Delete “${card.name}” and all its source entries (${sources})? This removes the card, previews, tags and its favorite/seen state. Downloaded files and download records are kept. Pending download and watch requests for this card are removed. The model can return through a scan or URL import.`;
+            const remember = document.createElement("label"); remember.className = "delete-card-remember";
+            const checkbox = document.createElement("input"); checkbox.type = "checkbox";
+            remember.append(checkbox, document.createTextNode(" Skip confirmation for:"));
+            const duration = document.createElement("select"); duration.setAttribute("aria-label", "How long to skip model card deletion confirmation");
+            for (const [value, text] of [["1h","1 hour"],["24h","24 hours"],["forever","Forever"]]) {
+                const option = document.createElement("option"); option.value = value; option.textContent = text; duration.append(option);
+            }
+            const scope = document.createElement("p"); scope.className = "delete-card-policy-note";
+            scope.textContent = "Applies to model card deletions in this browser. You can turn confirmation back on below Tags.";
+            const actions = document.createElement("div"); actions.className = "modelradar-confirm-actions";
+            const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "modelradar-confirm-cancel"; cancel.textContent = "Cancel";
+            const remove = document.createElement("button"); remove.type = "button"; remove.className = "modelradar-confirm-ok delete-card-danger"; remove.textContent = "Delete card";
+            let done = false;
+            const finish = confirmed => {
+                if (done) return; done = true;
+                document.removeEventListener("keydown", onKey, true);
+                overlay.remove(); if (previous?.isConnected) previous.focus();
+                resolve({confirmed, skipFor: confirmed && checkbox.checked ? duration.value : null});
+            };
+            const onKey = event => {
+                if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); finish(false); }
+                if (event.key === "Tab") {
+                    const controls = [checkbox, duration, cancel, remove];
+                    const first = controls[0], last = controls[controls.length - 1];
+                    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+                    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+                }
+            };
+            cancel.addEventListener("click", () => finish(false)); remove.addEventListener("click", () => finish(true));
+            overlay.addEventListener("click", event => { if (event.target === overlay) finish(false); });
+            actions.append(cancel, remove); box.append(title, body, remember, duration, scope, actions); overlay.append(box);
+            document.body.append(overlay); document.addEventListener("keydown", onKey, true);
+            requestAnimationFrame(() => overlay.classList.add("open")); cancel.focus();
+        });
+    }
+    return {readPolicy, savePolicy, clearPolicy, confirm};
+})();
+
+window.modelRadarInitCardDeletion = (details, close) => {
+    const button = details.querySelector(".delete-model-card");
+    const status = details.querySelector(".delete-card-confirmation-status");
+    const restore = details.querySelector(".restore-delete-card-confirmation");
+    if (!button) return;
+    const refreshPolicy = () => {
+        const policy = window.modelRadarCardDeletion.readPolicy();
+        if (!status) return;
+        status.hidden = !policy;
+        const text = status.querySelector("span");
+        if (text && policy) text.textContent = policy.mode === "forever" ? "Deletion confirmation is turned off." : `Deletion confirmation is skipped until ${new Date(policy.until).toLocaleString()}.`;
+    };
+    refreshPolicy();
+    restore?.addEventListener("click", () => { window.modelRadarCardDeletion.clearPolicy(); refreshPolicy(); });
+    button.addEventListener("click", async event => {
+        event.preventDefault(); event.stopPropagation(); if (button.disabled) return;
+        const modelId = details.dataset.modelId || details.querySelector(".model-detail")?.dataset.modelId;
+        if (!modelId) return;
+        button.disabled = true;
+        try {
+            const previewResponse = await fetch(`/api/model/${encodeURIComponent(modelId)}/delete-card`, {cache:"no-store"});
+            const preview = await previewResponse.json();
+            if (!previewResponse.ok || !preview.success) throw new Error(preview.error || "Unable to inspect this card.");
+            const choice = await window.modelRadarCardDeletion.confirm(preview.card, details.id === "collectionDelete");
+            if (!choice.confirmed) return;
+            const response = await fetch(`/api/model/${encodeURIComponent(modelId)}/delete-card`, {
+                method:"POST", headers:{"Content-Type":"application/json", "X-AbyssBeacon-Action":"delete-card"},
+                body:JSON.stringify({confirmed:true, identity:preview.card.identity})
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) throw new Error(result.error || "Unable to delete this card.");
+            if (!result.has_local_models) document.querySelector('input[name="sources"][value="local"]')?.closest('label')?.remove();
+            if (choice.skipFor) window.modelRadarCardDeletion.savePolicy(choice.skipFor);
+            close();
+            try { sessionStorage.removeItem("abyss_feed_snapshot_v2"); } catch (_) {}
+            document.querySelectorAll(`.model-card[data-id="${CSS.escape(String(modelId))}"]`).forEach(card => card.remove());
+            showModelRadarToast(result.message || "Model card deleted. Downloaded files were kept.");
+            try { await window.modelRadarRefreshSeenState?.(); } catch (_) {}
+            window.modelRadarFilterCards?.();
+        } catch (error) {
+            await window.modelRadarAlert(error.message || "Unable to delete this card.", {title:"Delete model card", okText:"OK"});
+        } finally { button.disabled = false; refreshPolicy(); }
+    });
+};
+
 
 window.modelRadarAlert = window.modelRadarAlert || function(message, options={}){
     return new Promise(resolve=>{
@@ -353,6 +469,8 @@ function initializeModal(){
             grid.appendChild(card);
             temporary=true;
         }
+        card.dataset.requestedVersion=options.versionId||"";
+        card.dataset.requestedSource=options.source||"";
         let target=card;
         let shortcut=null;
         if(options?.downloads){
@@ -374,8 +492,12 @@ function initializeModal(){
         const card = event.target.closest(".model-card");
         if(!card || !feedGrid.contains(card)) return;
 
+                const requestedVersion=card.dataset.requestedVersion;
+                const requestedSource=card.dataset.requestedSource;
+                delete card.dataset.requestedVersion;
+                delete card.dataset.requestedSource;
                 const openDownloadsFromCard = Boolean(
-                    event.target.closest(".card-access-icon.is-downloadable")
+                    event.target.closest(".card-access-icon.is-downloadable, .card-access-icon.is-auth-required, .card-access-icon.is-auth-possible")
                 );
 
                 // Let real links/buttons inside the card perform their own
@@ -393,7 +515,9 @@ function initializeModal(){
 
                 if (String(card.dataset.type || "").trim().toLowerCase() === "collection") {
                     window.modelRadarPrepareFeedDeparture?.();
-                    window.location.assign(`/collection/${encodeURIComponent(id)}`);
+                    const collectionUrl = new URL(`/collection/${encodeURIComponent(id)}`, location.origin);
+                    if (location.pathname === "/downloaded") collectionUrl.searchParams.set("library_filters", location.search.slice(1));
+                    window.location.assign(collectionUrl.href);
                     return;
                 }
 
@@ -409,6 +533,7 @@ function initializeModal(){
 
 
                         details.innerHTML = html;
+                        window.AbyssCivitaiAuthChecks?.checkModal(details);
 
                         // New status persists until an explicit Mark Seen action.
 
@@ -418,6 +543,7 @@ function initializeModal(){
                         // upward, so explicitly copy the source color to the
                         // actual frame whenever a model is opened.
                         const detailRoot = details.querySelector(".model-detail");
+                        window.modelRadarInitCardDeletion(details, closeModelOverlay);
                         const detailPanel = overlay.querySelector(".model-panel");
 
                         // Blur mature media inside the detail/gallery whenever
@@ -632,6 +758,7 @@ function initializeModal(){
                                     const data = await response.json();
                                     if (!response.ok || !data.success) throw new Error(data.error || "Unable to delete local files.");
                                     showModelRadarToast(`Deleted ${selectedIds.length} local file${selectedIds.length === 1 ? "" : "s"}`);
+                                    window.modelRadarRefreshSeenState?.().catch(console.warn);
                                     // Refresh this same model in place. This keeps the card open,
                                     // rebuilds installed/history state from the backend, and avoids
                                     // the stale-state path seen when Delete follows Remove History.
@@ -1094,6 +1221,15 @@ function initializeModal(){
 
                                     showModelRadarToast(data.message || "Model reloaded");
                                     window.modelRadarShowWatchNotifications?.();
+                                    const mergedIds=(data.merge?.removed_ids || []).filter(id=>/^\d+$/.test(String(id)));
+                                    if(mergedIds.length){
+                                        for(const id of mergedIds){
+                                            document.querySelectorAll(`.model-card[data-id="${id}"]`).forEach(card=>card.remove());
+                                        }
+                                        try{sessionStorage.removeItem("abyss_feed_snapshot_v2");}catch(_){}
+                                        try{await window.modelRadarReconcileFeedWindow?.(mergedIds.length);}catch(_){}
+                                        window.modelRadarFilterCards?.();
+                                    }
 
                                     // Reload can change repository classification (for example a
                                     // Hugging Face LoRA becoming a Collection). Keep the live feed
@@ -1201,16 +1337,17 @@ function initializeModal(){
                                 const label=details.querySelector(`[data-detail-stat-label="${field}"]`);
                                 const pair=["civitai","civitaired"].filter(key=>Object.hasOwn(metadata,key));
                                 if(node && ["downloads","likes"].includes(field) && pair.length){
-                                    node.replaceChildren();
-                                    if(label) label.hidden=true;
-                                    for(const key of pair){
-                                        const block=document.createElement("span");block.className="detail-source-stat";
-                                        const heading=document.createElement("strong");heading.textContent=`${key === "civitaired" ? "Civ Red" : sourceViewContext(key).label || key} ${field}`;
-                                        heading.title=`${sourceViewContext(key).label || key} ${field}`;
-                                        const value=document.createElement("span");value.dataset.statSource=key;
-                                        value.textContent=metadata[key][field] == null ? "Unavailable" : String(metadata[key][field]);
-                                        block.append(heading,value);node.append(block);
+                                    // CivitAI and Red expose the same popularity counter.
+                                    // Saved snapshots can lag one another; never add mirrors.
+                                    const counts=pair.map(key=>metadata[key][field])
+                                        .filter(value=>value !== null && value !== undefined && value !== "" && typeof value !== "boolean")
+                                        .map(Number).filter(value=>Number.isFinite(value) && value>=0);
+                                    if(label){
+                                        label.hidden=false;
+                                        label.textContent=`CivitAI ${field}`;
+                                        label.title=`Version ${field} · shared CivitAI/Red counter; highest available snapshot`;
                                     }
+                                    node.textContent=counts.length ? String(Math.max(...counts)) : "Unavailable";
                                 }else{
                                     if(label){
                                         label.hidden=false;
@@ -1430,6 +1567,34 @@ function initializeModal(){
                         // AbyssBeacon downloads server-side into the configured library instead
                         // of opening the browser's save dialog.
                         details.querySelectorAll("a.file-download-btn").forEach(link => {
+                            if (String((window.userPreferences||{}).download_behavior||"browser").toLowerCase()==="local") {
+                                const options=document.createElement('details');options.className='file-install-options';
+                                const summary=document.createElement('summary');summary.textContent='Install options ▾';options.append(summary);
+                                link.closest('.download-file')?.classList.add('has-install-options');link.closest('.download-file')?.append(options);
+                                let loaded=false;
+                                options.addEventListener('toggle',async()=>{
+                                    if(!options.open||loaded)return;loaded=true;
+                                    const status=document.createElement('p');status.textContent='Loading destination…';options.append(status);
+                                    try {
+                                        const url=new URL(link.href,location.href),parts=url.pathname.split('/');
+                                        const source=parts[2]==='source'?parts[4]:'canonical',index=parts.at(-1),id=parts[3];
+                                        const response=await fetch(`/api/install-options/${id}/${source}/${index}`),data=await response.json();
+                                        if(!response.ok||!data.success)throw new Error(data.error||'Unable to load options');
+                                        const type=document.createElement('select'),folder=document.createElement('input'),remember=document.createElement('input');
+                                        for(const [value,label] of Object.entries(data.types)){const option=document.createElement('option');option.value=value;option.textContent=label;type.append(option);}type.value=data.category;
+                                        folder.type='text';folder.value=data.folder||'';folder.placeholder=data.paths[type.value]||'Full destination folder';remember.type='checkbox';
+                                        const add=(label,input)=>{const l=document.createElement('label');l.append(document.createTextNode(label),input);options.append(l);};
+                                        add('Install as ',type);add('Save to (leave blank for suggested folder) ',folder);
+                                        const browse=document.createElement('button');browse.type='button';browse.textContent='Change folder…';options.append(browse);
+                                        add(' Remember for this model and file type',remember);
+                                        const hint=document.createElement('p');options.append(hint);
+                                        const update=()=>{link.dataset.installCategory=type.value;link.dataset.installFolder=folder.value.trim();link.dataset.rememberInstall=remember.checked?'1':'0';folder.placeholder=data.paths[type.value]||'';hint.textContent='Destination: '+(folder.value.trim()||data.paths[type.value]);link.title='Download as '+data.types[type.value];};
+                                        type.onchange=()=>{folder.value='';update();};folder.oninput=remember.onchange=update;
+                                        browse.onclick=async()=>{try{const r=await fetch('/api/installed-recovery/picker',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'folder'})});const v=await r.json();if(!v.success)throw new Error(v.error);if(v.path){folder.value=v.path;update();}}catch(e){status.textContent=e.message;}};
+                                        status.textContent='Source suggests: '+(data.types[data.detected]||'Unknown type')+'. Your choice applies locally to this file; existing files are not moved.';update();
+                                    }catch(e){status.textContent=e.message;loaded=false;}
+                                });
+                            }
                             link.addEventListener("click", async event => {
                                 const prefs = window.userPreferences || {};
                                 if (String(prefs.download_behavior || "browser").toLowerCase() !== "local") return;
@@ -1448,6 +1613,8 @@ function initializeModal(){
                                 link.title = "Installing to local AbyssBeacon library…";
                                 try {
                                     const installUrl = new URL(link.href, window.location.href);
+                                    if(link.dataset.installCategory){installUrl.searchParams.set('install_category',link.dataset.installCategory);installUrl.searchParams.set('install_folder',link.dataset.installFolder||'');installUrl.searchParams.set('remember_install',link.dataset.rememberInstall||'0');}
+                                    if(!await window.abyssChooseInstallDestination(installUrl,link.dataset)){link.textContent=original;link.title='Download';return;}
                                     installUrl.searchParams.set("save_info", saveInfoForDownload?.checked ? "1" : "0");
                                     installUrl.searchParams.set("save_preview", savePreviewForDownload?.checked ? "1" : "0");
                                     const response = await fetch(installUrl.toString(), {headers:{"Accept":"application/json"}});
@@ -1576,10 +1743,10 @@ function initializeModal(){
                             button.addEventListener("click",async event=>{
                                 event.preventDefault();
                                 event.stopPropagation();
-                                if(button.dataset.queued==="true") return;
+                                const removing=button.dataset.queued==="true";
                                 const original=button.textContent;
                                 button.disabled=true;
-                                button.textContent="Adding…";
+                                button.textContent=removing?"Removing…":"Adding…";
                                 try{
                                     const response=await fetch("/api/download-queue",{
                                         method:"POST",
@@ -1590,14 +1757,16 @@ function initializeModal(){
                                             version_id:button.dataset.versionId||"",
                                             version_name:button.dataset.versionName||"",
                                             release_at:button.dataset.releaseAt||"",
+                                            remove:removing,
                                         }),
                                     });
                                     const data=await response.json();
                                     if(!response.ok||!data.success)throw new Error(data.error||"Unable to add this release to the queue.");
-                                    button.dataset.queued="true";
-                                    button.textContent="✓ Waiting in queue";
-                                    button.classList.add("queued");
-                                    showModelRadarToast(`Queued "${button.dataset.versionName||"this version"}" for download when available`);
+                                    button.dataset.queued=String(!removing);
+                                    button.disabled=false;
+                                    button.textContent=removing?"Download when available":"Remove from queue";
+                                    button.classList.toggle("queued",!removing);
+                                    showModelRadarToast(removing?"Removed from queue":`Queued "${button.dataset.versionName||"this version"}" for download when available`);
                                 }catch(error){
                                     button.disabled=false;
                                     button.textContent=original;
@@ -1610,7 +1779,7 @@ function initializeModal(){
                             button.addEventListener("click",async event=>{
                                 event.preventDefault();
                                 event.stopPropagation();
-                                if(button.dataset.watching==="true") return;
+                                const removing=button.dataset.watching==="true";
                                 const original=button.textContent;
                                 button.disabled=true;
                                 button.textContent="Adding…";
@@ -1626,15 +1795,16 @@ function initializeModal(){
                                             file_id:button.dataset.fileId||"",
                                             file_name:button.dataset.fileName||"",
                                             file_index:Number(button.dataset.fileIndex||-1),
+                                            remove:removing,
                                         }),
                                     });
                                     const data=await response.json();
                                     if(!response.ok||!data.success)throw new Error(data.error||"Unable to watch this paid file.");
-                                    button.dataset.watching="true";
-                                    button.textContent="✓ Watching";
-                                    button.classList.add("watching");
+                                    button.dataset.watching=String(!removing);
+                                    button.textContent=removing?"Watch":"Remove from watchlist";
+                                    button.classList.toggle("watching",!removing);
                                     button.disabled=false;
-                                    showModelRadarToast(`Watching "${button.dataset.fileName||"this file"}" for availability`);
+                                    showModelRadarToast(removing?"Removed from watchlist":`Watching "${button.dataset.fileName||"this file"}" for availability`);
                                 }catch(error){
                                     button.disabled=false;
                                     button.textContent=original;
@@ -1649,6 +1819,11 @@ function initializeModal(){
                         if (applySourceView) applySourceView("combined", {preserveVersion:false});
                         else if (versionPills.length) selectVersion(versionPills[0]);
                         else setCopyLinkTarget(null);
+                        if(requestedVersion){
+                            if(requestedSource && applySourceView)applySourceView(requestedSource,{preserveVersion:false});
+                            const target=[...versionPills].find(p=>p.dataset.versionId===requestedVersion);
+                            if(target)selectVersion(target);
+                        }
 
 
                         if (
@@ -1788,3 +1963,13 @@ function initializeModal(){
 
 
 }
+
+document.addEventListener("click",async event=>{
+    const button=event.target.closest("[data-open-record]");
+    if(!button)return;
+    try{
+        const response=await fetch("/api/recorded-folder/"+button.dataset.openRecord,{method:"POST"});
+        const result=await response.json();
+        if(!result.success)throw new Error(result.error);
+    }catch(error){window.modelRadarAlert(error.message,{title:"Open folder"});}
+});

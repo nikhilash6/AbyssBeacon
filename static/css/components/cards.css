@@ -370,3 +370,16 @@
     object-fit: cover;
     display: block;
 }
+
+/* A source login requirement is not the same as a gated/restricted model.
+   Use the flat sign-in glyph rather than an emoji padlock. */
+.card-access-icon.is-auth-required {
+    color:#ffc16b;
+    border:1px solid rgba(255,193,107,.78);
+}
+.card-access-icon.is-auth-required svg.auth-login-icon {
+    width:19px;
+    height:19px;
+    fill:none;
+    stroke:currentColor;
+}

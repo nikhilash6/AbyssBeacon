@@ -255,6 +255,17 @@ function initializeNavbar(){
         requestAnimationFrame(dockScanProgressBelowOptions);
     }
 
+    window.abyssOpenSetting = setting => {
+        if(setting === 'accounts') {openSettingsOverlay('/settings/accounts', 'Source Accounts');return true;}
+        showOptionsPage('library');optionsPanel?.classList.add('open');
+        const selector = ({downloads:'#downloadMethodSettings',retention:'#automaticRetentionSettings',appearance:'.library-appearance-settings'})[setting];
+        const target = optionsPanel?.querySelector('[data-options-page="library"] ' + (selector || '.library-download-settings'));
+        if (!target) return false;
+        target.open = true;
+        requestAnimationFrame(() => target.querySelector('summary').scrollIntoView({block:'start'}));
+        return true;
+    };
+
     function openSettingsOverlay(url, title){
         if(!settingsOverlay || !settingsFrame) return;
         settingsFrame.src = url;
@@ -278,8 +289,11 @@ function initializeNavbar(){
         window.location.reload();
     }
 
+    let sourceAuthUpdated = false;
+
     function closeSettingsOverlay(){
         if(!settingsOverlay || !settingsFrame) return;
+        const wasOpen = settingsOverlay.classList.contains("open");
         if(scanSettingsHeaderActions) scanSettingsHeaderActions.hidden=true;
         setScanSettingsHeaderState("");
         if(scanSettingsHeaderSave) scanSettingsHeaderSave.disabled=false;
@@ -288,6 +302,15 @@ function initializeNavbar(){
         settingsFrame.src = "about:blank";
 
         restoreScanProgressToNavbar();
+        if(wasOpen) window.dispatchEvent(new CustomEvent("abyss:guided-settings-closed", {detail:{kind:"overlay"}}));
+        if(sourceAuthUpdated){sourceAuthUpdated=false;window.location.reload();}
+    }
+
+    function closeOptionsPanel(){
+        if(!optionsPanel?.classList.contains("open")) return;
+        optionsPanel.classList.remove("open");
+        restoreScanProgressToNavbar();
+        window.dispatchEvent(new CustomEvent("abyss:guided-settings-closed", {detail:{kind:"options"}}));
     }
 
     optionsPanel?.querySelectorAll(".options-item[data-page]").forEach(button => {
@@ -308,8 +331,7 @@ function initializeNavbar(){
 
     document.getElementById("closeOptionsReturn")?.addEventListener("click", event => {
         event.stopPropagation();
-        optionsPanel?.classList.remove("open");
-        restoreScanProgressToNavbar();
+        closeOptionsPanel();
     });
 
     // Settings pages are loaded inside a same-origin iframe.  Let an embedded
@@ -318,6 +340,10 @@ function initializeNavbar(){
     window.addEventListener("message", event => {
         if(event.origin !== window.location.origin) return;
         if(event.source !== settingsFrame?.contentWindow) return;
+        if(event.data?.type === "abyss:source-auth-updated"){
+            sourceAuthUpdated = true;
+            return;
+        }
         if(event.data?.type === "modelradar:close-settings"){
             closeSettingsOverlay();
             return;
@@ -396,8 +422,7 @@ function initializeNavbar(){
             event.stopPropagation();
             const open = optionsPanel.classList.contains("open");
             if(open){
-                optionsPanel.classList.remove("open");
-                restoreScanProgressToNavbar();
+                closeOptionsPanel();
                 return;
             }
             showOptionsPage("filters");
@@ -409,10 +434,7 @@ function initializeNavbar(){
     }
 
     document.addEventListener("click", () => {
-        if(optionsPanel?.classList.contains("open")){
-            optionsPanel.classList.remove("open");
-            restoreScanProgressToNavbar();
-        }
+        if(optionsPanel?.classList.contains("open")) closeOptionsPanel();
     });
 
     window.addEventListener("resize", () => {
@@ -449,7 +471,7 @@ function updateSourcePills(){
     const summary = document.getElementById("scannerSourceSummary");
     if(summary){
         const labels = inputs
-            .filter(input => input.checked)
+            .filter(input => input.checked && input.value !== "local")
             .map(input => input.closest("label")?.querySelector("span")?.textContent?.trim() || input.value);
         summary.textContent = labels.length ? labels.join(" · ") : "No sources selected";
     }
@@ -547,7 +569,6 @@ document.getElementById("mediaPerModelLimit")?.addEventListener("change", async 
 
 document.addEventListener("DOMContentLoaded",()=>{
     const autoEnabled=document.getElementById("autoCleanupEnabled");
-    const autoSettings=document.getElementById("autoCleanupSettings");
     const autoDays=document.getElementById("autoCleanupDays");
     const creatorDays=document.getElementById("creatorCleanupDays");
     let saveTimer=null;
@@ -556,7 +577,9 @@ document.addEventListener("DOMContentLoaded",()=>{
         saveTimer=setTimeout(()=>fetch("/save_preferences",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({auto_cleanup_enabled:autoEnabled?.checked===true,auto_cleanup_days:Math.max(0,Number.parseInt(autoDays?.value||"7",10)||0),creator_cleanup_days:Math.max(0,Number.parseInt(creatorDays?.value||"30",10)||0)})}).catch(()=>{}),150);
     };
     const syncAutoCleanupVisibility=()=>{
-        if(autoSettings) autoSettings.hidden=autoEnabled?.checked!==true;
+        for (const input of [autoDays, creatorDays]) {
+            if (input) input.disabled = !autoEnabled?.checked;
+        }
     };
     syncAutoCleanupVisibility();
     autoEnabled?.addEventListener("change",()=>{syncAutoCleanupVisibility();saveAuto();});
@@ -808,10 +831,23 @@ document.addEventListener("DOMContentLoaded",()=>{
 
 // Local installer preferences.
 document.addEventListener("DOMContentLoaded",()=>{
-    const behavior=document.getElementById("downloadBehavior");
+    const methods = document.querySelectorAll('input[name="download_method"]');
+    const selectedMethod = () => document.querySelector('input[name="download_method"]:checked')?.value || "browser";
     const root=document.getElementById("localModelsRoot");
+    const destination = document.getElementById('installDestination');
+    const customRoot = document.getElementById('customLibraryRoot');
+    const activeRoot = () => destination?.value === 'custom' ? customRoot : root;
     const layout=document.getElementById("installLayout");
-    const friendly=document.getElementById("friendlyFilenames");
+    function updateExample() {
+        if (!layout) return;
+        const example = layout.selectedOptions[0].dataset.example;
+        const custom = destination.value === 'custom';
+        const prefix = activeRoot().value.trim().replace(/[\\/]+$/, '');
+        const relative = custom ? example.replace(/^models \/ /, '') : example;
+        document.getElementById('layoutExample').textContent = prefix ? prefix + ' / ' + relative : relative;
+    }
+    layout?.addEventListener('change', updateExample);
+    updateExample();
     const existing=document.getElementById("existingFileBehavior");
     const info=document.getElementById("saveModelInfo");
     const preview=document.getElementById("saveModelPreview");
@@ -819,10 +855,11 @@ document.addEventListener("DOMContentLoaded",()=>{
     const status=document.getElementById("localInstallerStatus");
     let timer=null;
     const payload=()=>({
-        download_behavior:behavior?.value||"browser",
+        download_behavior:selectedMethod(),
+        install_destination:destination?.value || 'comfy',
+        custom_library_root:(customRoot?.value || '').trim(),
         local_comfy_root:(root?.value||"").trim(),
         install_layout:layout?.value||"simple",
-        friendly_filenames:friendly?.value||"off",
         existing_file_behavior:existing?.value||"keep_both",
         save_model_info:info?.checked!==false,
         save_model_preview:preview?.checked!==false,
@@ -834,17 +871,64 @@ document.addEventListener("DOMContentLoaded",()=>{
         fetch("/save_preferences",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(values)}).catch(()=>{});
     };
     const delayed=()=>{clearTimeout(timer);timer=setTimeout(save,180);};
-    [behavior,layout,friendly,existing,info,preview,document.getElementById("queuedDownloadBehavior")].forEach(el=>el?.addEventListener("change",save));
-    root?.addEventListener("input",delayed);
-    root?.addEventListener("change",save);
+    [layout,existing,info,preview,document.getElementById("queuedDownloadBehavior")].forEach(el=>el?.addEventListener("change",save));
+    document.getElementById('openDownloadMethod')?.addEventListener('click', () => {
+        window.abyssOpenSetting('downloads');
+        document.querySelector('input[name="download_method"]:checked')?.focus({preventScroll:true});
+    });
+    for (const method of methods) {
+        method.addEventListener('change', () => {
+            const local = selectedMethod() === 'local';
+            document.getElementById('downloadFolderSettings').hidden = !local;
+            document.getElementById('localInstallDefaults').disabled = !local;
+            document.getElementById('localDefaultsHint').hidden = local;
+            save();
+        });
+    }
+    destination?.addEventListener('change', () => {
+        const custom = destination.value === 'custom';
+        document.getElementById('customRootFields').hidden = !custom;
+        document.getElementById('comfyRootFields').hidden = custom;
+        status.textContent = '';
+        updateExample();
+        save();
+    });
+    document.getElementById('browseComfyRoot')?.addEventListener('click', async event => {
+        const field = activeRoot();
+        const browse = event.currentTarget;
+        browse.disabled = true;
+        try {
+            const response = await fetch('/api/installed-recovery/picker', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({kind:'folder'})});
+            const data = await response.json();
+            if (!response.ok || !data.success) throw new Error(data.error || 'Unable to browse folders');
+            if (data.path) {
+                field.value = data.path;
+                updateExample();
+                status.textContent = '';
+                save();
+            }
+        } catch (error) {
+            status.textContent = error.message;
+        } finally {
+            browse.disabled = false;
+        }
+    });
+    for (const field of [root, customRoot]) {
+        field?.addEventListener("input", () => { updateExample(); delayed(); });
+        field?.addEventListener("change", save);
+    }
     test?.addEventListener("click",async()=>{
+        const field = activeRoot();
+        const original = field.value;
         if(status) status.textContent="Testing…";
         try{
-            const response=await fetch("/api/install/test-path",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:(root?.value||"").trim()})});
+            const response=await fetch("/api/install/test-path",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:original.trim(),destination:destination.value})});
             const data=await response.json();
+            if (field !== activeRoot() || field.value !== original) return;
             if(status){status.textContent=data.message||data.error||"Unable to test folder.";status.style.color=response.ok?"#78e8ad":"#ff8f9c";}
             if(response.ok){
-                if(data.normalized_path && root) root.value=data.normalized_path;
+                if(data.normalized_path) field.value=data.normalized_path;
+                updateExample();
                 save();
             }
         }catch(error){if(status){status.textContent=error.message||"Unable to test folder.";status.style.color="#ff8f9c";}}
@@ -1023,8 +1107,15 @@ document.addEventListener("DOMContentLoaded",()=>{
             row.className=`download-history-row download-queue-row status-${item.status||"waiting"}`;
             const main=document.createElement("div");
             main.className="download-history-main";
-            const name=document.createElement("strong");
+            const name=document.createElement("button");
+            name.type="button";
+            name.className="download-history-model-link";
             name.textContent=item.model_name||item.model_key||"Queued model";
+            name.onclick=()=>{
+                overlay.classList.remove("open");
+                overlay.setAttribute("aria-hidden","true");
+                window.modelRadarOpenModel(item.model_id,{downloads:true,versionId:item.version_id,source:item.source});
+            };
             const version=document.createElement("span");
             const statusLabel=item.status==="ready"?"Ready to install":
                 item.status==="installing"?"Installing…":
@@ -1053,8 +1144,13 @@ document.addEventListener("DOMContentLoaded",()=>{
                 install.addEventListener("click",async()=>{
                     install.disabled=true;install.textContent="Starting…";
                     try{
-                        const response=await fetch(`/api/download-queue/${item.id}/install`,{method:"POST"});
-                        const data=await response.json();
+                        const installUrl=new URL(`/api/download-queue/${item.id}/install`,location.href);
+                        let response=await fetch(installUrl,{method:"POST"});
+                        let data=await response.json();
+                        if(data.needs_destination){
+                            if(!await window.abyssChooseInstallDestination(installUrl,{},data.options)){install.disabled=false;install.textContent='Install';return;}
+                            response=await fetch(installUrl,{method:'POST'});data=await response.json();
+                        }
                         if(!response.ok||!data.success)throw new Error(data.error||"Install failed.");
                         await loadQueue();
                     }catch(error){
@@ -1434,7 +1530,9 @@ document.addEventListener("DOMContentLoaded",()=>{
                 const total=Number(item.total_bytes)>0?humanBytes(item.total_bytes):"size unknown";
                 const percent=Number.isFinite(pct)?` · ${Math.round(pct)}%`:"";
                 const speed=Number(item.speed_bps)>0?` · ${humanBytes(item.speed_bps)}/s`:"";
-                meta.textContent=`${downloaded} / ${total}${percent}${speed}`;
+                const seconds=Math.ceil((item.total_bytes-item.downloaded_bytes)/item.speed_bps);
+                const eta=speed && Number.isFinite(seconds) && seconds>0 ? ` · about ${seconds<60 ? seconds+" sec" : Math.ceil(seconds/60)+" min"} left` : "";
+                meta.textContent=`${downloaded} / ${total}${percent}${speed}${eta}`;
             }
             foot.append(meta);
 

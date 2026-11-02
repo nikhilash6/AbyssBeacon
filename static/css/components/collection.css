@@ -1556,3 +1556,37 @@ body.collection-readme-open { overflow: hidden; }
 .collection-model-card-actions > :is(button,a,select):focus-visible { outline:2px solid var(--collection-source-color, #00eaff); outline-offset:3px; }
 .collection-model-card-actions > [hidden] { display:none; }
 .collection-model-card-actions > select option { background:#0a1115; color:#dffcff; }
+
+.collection-pagination{display:flex;justify-content:center;gap:20px;align-items:center;padding:16px;flex-wrap:wrap}.collection-pagination a{color:var(--accent,#eaff00)}.collection-expand-row{display:flex;justify-content:flex-end;margin-top:8px}.collection-family-sort{flex:1}.collection-sort-divider{display:none}#collectionDelete{margin-top:32px;padding-top:24px;border-top:1px solid #433039}
+
+/* Collection navbar: one non-clickable outline around the two actual actions.
+   The wrapper and gaps have no event handler; only the link and button navigate. */
+.collection-page .nav-collection-controls .navbar-download-links {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 38px;
+    box-sizing: border-box;
+    padding: 0 14px;
+    border: 1px solid color-mix(in srgb, var(--collection-source-color) 60%, #27404a);
+    border-radius: 999px;
+    background: #081014;
+    cursor: default;
+}
+.collection-page .nav-collection-controls .navbar-download-links .nav-library-link,
+.collection-page .nav-collection-controls .navbar-download-links #downloadHistoryButton {
+    display: inline;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    min-height: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.2;
+    letter-spacing: normal;
+    white-space: nowrap;
+    cursor: pointer;
+}

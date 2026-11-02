@@ -24,87 +24,24 @@ from scanners.common import metadata as common_metadata
 
 NAME = "tensorhub"
 
-# Built-in TensorHub discovery suppression. These accounts are skipped by
-# passive scans, tags, and creator expansion, but an explicit exact lookup may
-# retrieve them. This is deliberately distinct from user-created blocks.
-DISCOVERY_SUPPRESSED_CREATORS = {
-    "e7g3",
-    "kunjung",
-    "shuteye404",
-    "jigger boo snickerdoodle",
-    "artificial-heart-ai",
-    "浅夏",
-    "hotriplex554",
-    "lanatholen",
-    "doll_factory",
-    "sky_bai",
-}
-DISCOVERY_SUPPRESSED_OWNER_IDS = {
-    "838872246360732333",   # Kunjung
-    "893963469739538903",   # R (ID-only; nickname is ambiguous)
-    "829311455886071880",   # ShuTeye404
-    "1028139481795973773",  # Jigger boo snickerdoodle
-    "898710231087849791",   # Artificial-Heart-AI
-    "883507418028311138",   # 浅夏
-    "854532027830022101",   # hotriplex554
-    "830855780097062662",   # Lanatholen
-    "857531978734417554",   # Doll_Factory
-    "714470940993453581",   # sky_bai
-}
+# Non-user-configurable, source-specific safety exclusions.
+HARD_BLOCKED_CREATORS = {'浅夏', 'lanatholen', 'jigger boo snickerdoodle', 'kunjung', 'artificial-heart-ai', 'shuteye404', 'e7g3', 'doll_factory', 'hotriplex554', 'sky_bai'}
+HARD_BLOCKED_OWNER_IDS = {'830855780097062662', '838872246360732333', '893963469739538903', '857531978734417554', '829311455886071880', '714470940993453581', '1028139481795973773', '898710231087849791', '854532027830022101', '883507418028311138'}
 
 
-def _explicit_owner_id_from_query(query):
-    text = str(query or "").strip()
-    if re.fullmatch(r"\d{8,}", text):
-        return text
-    match = re.search(r"(?:https?://)?(?:www\.)?tensorhub\.art/u/(\d+)(?:[/?#]|$)", text, re.I)
-    return match.group(1) if match else ""
-
-
-def _is_exact_suppressed_creator_lookup(query, owner_id="", nickname=""):
-    query_text = str(query or "").strip().casefold()
-    owner_id = str(owner_id or "").strip()
-    nickname_key = str(nickname or "").strip().casefold()
-    if not query_text:
-        return False
-    explicit_owner_id = _explicit_owner_id_from_query(query)
-    if owner_id and (query_text == owner_id.casefold() or explicit_owner_id == owner_id):
-        return True
-    # Name-based override is allowed only for names explicitly listed here.
-    # The suppressed one-letter `R` account is intentionally ID-only.
-    return bool(
-        nickname_key
-        and nickname_key in DISCOVERY_SUPPRESSED_CREATORS
-        and query_text == nickname_key
-    )
-
-
-def _creator_identity_is_blocked(owner_id="", nickname="", blocked_creators=None, explicit_query=""):
+def _creator_identity_is_blocked(owner_id="", nickname="", blocked_creators=None):
     owner_id = str(owner_id or "").strip()
     nickname = str(nickname or "").casefold().strip()
     blocked_creators = blocked_creators or set()
-
-    # User-selected source/universal blocks are absolute. Exact lookup never
-    # overrides a choice the user made in Blocked Creators.
-    if nickname and nickname in blocked_creators:
-        return True
-
-    suppressed = (
-        owner_id in DISCOVERY_SUPPRESSED_OWNER_IDS
-        or bool(nickname and nickname in DISCOVERY_SUPPRESSED_CREATORS)
-    )
-    if not suppressed:
-        return False
-    return not _is_exact_suppressed_creator_lookup(explicit_query, owner_id, nickname)
+    return owner_id in HARD_BLOCKED_OWNER_IDS or bool(nickname and nickname in (blocked_creators | HARD_BLOCKED_CREATORS))
 
 
-def _owner_is_blocked(owner, blocked_creators, explicit_query=""):
+def _owner_is_blocked(owner, blocked_creators):
     owner = owner if isinstance(owner, dict) else {}
     return _creator_identity_is_blocked(
         owner.get("id"),
         owner.get("nickname"),
         blocked_creators,
-        explicit_query=explicit_query,
     )
 DISPLAY = "TensorHub Art"
 ENABLED = True
@@ -2835,7 +2772,7 @@ def _fetch_general_search(query, intent, max_results, blocked_creators):
         owner = candidate.get("owner") or {}
         if kind == "MODEL" or (isinstance(nested_model, dict) and candidate.get("id")):
             project_id = str(candidate.get("id") or "").strip()
-            if project_id and not _owner_is_blocked(owner, blocked_creators, explicit_query=query):
+            if project_id and not _owner_is_blocked(owner, blocked_creators):
                 model_items.setdefault(project_id, candidate)
             continue
 
@@ -2843,7 +2780,7 @@ def _fetch_general_search(query, intent, max_results, blocked_creators):
         if kind == "USER" or (candidate.get("nickname") and candidate.get("id") and not nested_model):
             owner_id = str(candidate.get("id") or candidate.get("userId") or "").strip()
             nickname = str(candidate.get("nickname") or candidate.get("name") or owner_id).strip()
-            if owner_id and not _creator_identity_is_blocked(owner_id, nickname, blocked_creators, explicit_query=query):
+            if owner_id and not _creator_identity_is_blocked(owner_id, nickname, blocked_creators):
                 users.setdefault(owner_id, nickname)
 
     _status_print(
@@ -2861,7 +2798,7 @@ def _creator_items(data):
     return values if isinstance(values, list) else []
 
 
-def _fetch_creator_catalog(owner_id, max_results, blocked_creators, owner_name="", single_page=False, expected_base_model="", explicit_query=""):
+def _fetch_creator_catalog(owner_id, max_results, blocked_creators, owner_name="", single_page=False, expected_base_model=""):
     """Fetch the broader creator catalog exposed by TensorHub creator pages.
 
     TensorHub labels this request visibilityGte=PRIVATE, but models returned by
@@ -2871,7 +2808,7 @@ def _fetch_creator_catalog(owner_id, max_results, blocked_creators, owner_name="
     owner_id = str(owner_id or "").strip()
     if not owner_id:
         return []
-    if _creator_identity_is_blocked(owner_id, owner_name, blocked_creators, explicit_query=explicit_query):
+    if _creator_identity_is_blocked(owner_id, owner_name, blocked_creators):
         return []
 
     collected = []
@@ -2911,7 +2848,7 @@ def _fetch_creator_catalog(owner_id, max_results, blocked_creators, owner_name="
             if not isinstance(item, dict):
                 continue
             item_owner = item.get("owner") or {}
-            if _owner_is_blocked(item_owner, blocked_creators, explicit_query=explicit_query):
+            if _owner_is_blocked(item_owner, blocked_creators):
                 continue
             if expected_base_model and not _matches_base_model(item, expected_base_model):
                 continue
@@ -3094,6 +3031,7 @@ def scan_tag(tag_id, max_results=100, sort="NEWEST", tag_name=""):
         blocked_creators = set(database.get_blocked_creator_set(NAME))
     except Exception:
         blocked_creators = set()
+    blocked_creators.update(HARD_BLOCKED_CREATORS)
 
     label = str(tag_name or tag_id).strip()
     print("\n================================")
@@ -3240,6 +3178,7 @@ def scan(term, scan_seen_models=None, scan_settings=None, creator=None):
         for value in (scan_settings.get("_blocked_creators") or [])
         if str(value or "").strip()
     }
+    blocked_creators.update(HARD_BLOCKED_CREATORS)
 
     search_mode = str(scan_settings.get("_search_mode") or "text").strip().lower()
     base_model = str(scan_settings.get("_architecture") or "").strip()
@@ -3282,7 +3221,6 @@ def scan(term, scan_seen_models=None, scan_settings=None, creator=None):
                 blocked_creators,
                 owner_name=creator,
                 expected_base_model=structured_base,
-                explicit_query=creator,
             )
             owner_elapsed = time.perf_counter() - owner_started
             _status_print(
@@ -3430,20 +3368,9 @@ def scan(term, scan_seen_models=None, scan_settings=None, creator=None):
     # keyword itself to map to a TensorHub base model first.
     if external_search and external_query:
         search_started = time.perf_counter()
-        explicit_owner_id = _explicit_owner_id_from_query(external_query)
-        if explicit_owner_id:
-            search_items = _fetch_creator_catalog(
-                explicit_owner_id, max_results, blocked_creators,
-                explicit_query=external_query, expected_base_model=structured_base,
-            )
-            matched_users = []
-            _status_print(
-                f"TensorHub exact creator lookup: {len(search_items)} project result(s)"
-            )
-        else:
-            search_items, matched_users = _fetch_general_search(
-                external_query, external_intent, max_results, blocked_creators
-            )
+        search_items, matched_users = _fetch_general_search(
+            external_query, external_intent, max_results, blocked_creators
+        )
 
         # Creator hits are leads: expand their TensorHub catalogs, then dedupe
         # against direct MODEL hits. Architecture context, when selected, is a
@@ -3462,7 +3389,7 @@ def scan(term, scan_seen_models=None, scan_settings=None, creator=None):
                     break
                 for item in _fetch_creator_catalog(
                     owner_id, per_creator, blocked_creators, owner_name=nickname,
-                    expected_base_model=structured_base, explicit_query=external_query,
+                    expected_base_model=structured_base,
                 ):
                     project_id = str(item.get("id") or "").strip()
                     if project_id:

@@ -133,12 +133,24 @@ function initializeFeedWindowing(){
     window.addEventListener("pagehide",()=>{
         if(!departing) saveFeedSnapshot();
     });
-    window.addEventListener("pageshow",event=>{
+    async function refreshChangedFavorites(preserveScroll){
+        const key = "abyss_feed_favorites_dirty";
+        try {
+            if (!sessionStorage.getItem(key)) return;
+        } catch (_) { return; }
+        const data = await fetchChunk(windowStart, {mode:"replace", limit:replaceSize, preserveScroll});
+        if (data) {
+            try { sessionStorage.removeItem(key); } catch (_) {}
+        }
+    }
+    window.addEventListener("pageshow",async event=>{
         if(!event.persisted) return;
         departing=false;positioning=true;
         window.modelRadarCloseModelOverlay?.();
         try{ sessionStorage.removeItem(feedRestorePendingKey); }catch(_){ }
-        finishPositioning(++positionOperation);
+        const operation = ++positionOperation;
+        await refreshChangedFavorites(true);
+        finishPositioning(operation);
     });
 
     function mountedCards(){
@@ -630,6 +642,8 @@ function initializeFeedWindowing(){
                 }catch(_){ }
                 if(start !== windowStart) await fetchChunk(start,{mode:"replace",limit:replaceSize});
             }
+            if(operation !== positionOperation) return;
+            await refreshChangedFavorites(false);
             if(operation !== positionOperation) return;
             window.scrollTo({top:target,behavior:"instant"});
             if(snapshot?.anchor){

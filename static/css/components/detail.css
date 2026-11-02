@@ -2050,3 +2050,30 @@
     .download-file-picker-footer { flex-wrap: wrap; }
     .download-file-picker-footer-spacer { display: none; }
 }
+
+/* Card removal lives below Tags, apart from download/file actions. */
+.model-card-management { margin-top:28px; padding-top:24px; border-top:1px solid #38242a; }
+.model-card-management > p, .delete-card-policy-note { color:#9aa8ad; font-size:13px; line-height:1.5; }
+.delete-model-card, .delete-card-danger { border:1px solid #b94557; color:#ff8596; background:#261318; border-radius:9px; padding:10px 16px; cursor:pointer; }
+.delete-model-card:disabled { opacity:.55; cursor:wait; }
+.delete-card-confirmation-status { color:#b9a4a9; font-size:12px; }
+.restore-delete-card-confirmation { background:transparent; color:#65dbe8; border:0; text-decoration:underline; cursor:pointer; margin-left:8px; }
+.delete-card-remember { display:flex; align-items:center; gap:7px; margin-top:16px; }
+.delete-card-dialog select { background:#141c20; color:#e7f2f4; border:1px solid #3c6670; border-radius:6px; padding:7px 10px; margin:10px 0; }
+.delete-card-dialog p { white-space:normal; }
+
+.delete-card-dialog { color:#e7f2f4; max-height:calc(100vh - 48px); overflow-y:auto; }
+
+#modelDetails { scrollbar-gutter:stable both-edges; }
+.model-detail .detail-header {padding-inline:30px;}
+.detail-actions .close-model {position:static;flex:none;}
+@media(max-width:700px){.model-detail .detail-header{padding-inline:16px;}}
+.recorded-path-button {color:#8ee9ff;background:transparent;border:0;cursor:pointer;overflow-wrap:anywhere;text-align:start;}
+.recorded-path-button:hover {text-decoration:underline;}
+
+.installed-location-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:8px 26px;}
+.installed-location-row .location-text,.downloaded-storage-path .recorded-path-button,.download-installed-path.recorded-path-button{font:inherit;font-size:.83rem;color:#a9c1ca;overflow-wrap:anywhere;text-align:start;padding:0;}
+.installed-location-row .location-text{flex:1 1 240px;}
+.open-folder-pill,.file-info-toggle{border:1px solid #28616e;background:#07171c;color:#72e4ee;border-radius:18px;padding:5px 12px;cursor:pointer;}
+.open-folder-pill:hover,.file-info-toggle:hover{background:#103039;}
+.file-info-toggle{margin:10px 0;}

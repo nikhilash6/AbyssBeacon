@@ -1,3 +1,124 @@
+// Interpret only recognized execution paths; raw metadata is always retained.
+function abyssGenerationMetadata(meta={}){
+    const object=value=>{if(typeof value==='string'){try{return JSON.parse(value);}catch(_){return null;}}return value&&typeof value==='object'?value:null;};
+    const comfy=object(meta.comfy)||{};
+    const graph=object(comfy.prompt)||(object(meta.prompt)&&!Array.isArray(object(meta.prompt))?object(meta.prompt):null);
+    const candidate=object(comfy.workflow)||object(meta.workflow);
+    const workflow=candidate&&Array.isArray(candidate.nodes)&&candidate.nodes.length>0&&Array.isArray(candidate.links)&&candidate.nodes.every(n=>n&&n.id!==undefined&&typeof n.type==='string')?candidate:null;
+    const result={settings:[],positive:null,negative:null,workflow,graph,notice:null};
+    const pick=(...keys)=>{for(const k of keys)if(meta[k]!==undefined&&meta[k]!==null&&meta[k]!=='')return meta[k];return null;};
+    const add=(label,value)=>{if(value!==null&&value!==undefined&&value!==''&&typeof value!=='object')result.settings.push([label,String(value)]);};
+    const directPrompt=pick('prompt','Prompt','positive_prompt','positivePrompt');
+    if(typeof directPrompt==='string')result.positive=directPrompt;
+    const directNegative=pick('negative_prompt','negativePrompt','Negative prompt');
+    if(typeof directNegative==='string')result.negative=directNegative;
+    let active=null;
+    if(graph){
+        const node=id=>graph[String(id)];
+        const link=value=>Array.isArray(value)&&value.length===2&&node(value[0]);
+        // Accept SaveImage -> VAEDecode -> KSampler only. Unknown transforms,
+        // multiple samplers or divergent saved outputs remain raw graph data.
+        const saves=Object.values(graph).filter(n=>n?.class_type==='SaveImage');
+        const samplers=[];
+        for(const save of saves){
+            const decode=link(save.inputs?.images);
+            const sampler=decode?.class_type==='VAEDecode'?link(decode.inputs?.samples):null;
+            if(sampler?.class_type!=='KSampler'){samplers.push(null);continue;}
+            samplers.push(sampler);
+        }
+        if(samplers.length&&samplers.every(n=>n&&n===samplers[0]))active=samplers[0];
+        if(!active)result.notice='The active generation path could not be identified reliably. Graph details are available below.';
+        else{
+            const inputs=active.inputs||{};
+            result.positive=null;result.negative=null;
+            const positive=link(inputs.positive),negative=link(inputs.negative);
+            if(positive?.class_type==='CLIPTextEncode'&&typeof positive.inputs?.text==='string'){
+                result.positive=positive.inputs.text;
+                const clip=link(positive.inputs.clip);
+                if(clip?.class_type==='CLIPLoader')add('Text encoder',clip.inputs?.clip_name);
+            }
+            if(negative?.class_type==='CLIPTextEncode'&&typeof negative.inputs?.text==='string')result.negative=negative.inputs.text;
+            if(negative?.class_type==='ConditioningZeroOut')result.negative='';
+            for(const [label,key] of [['Seed','seed'],['Steps','steps'],['CFG','cfg'],['Sampler','sampler_name'],['Scheduler','scheduler'],['Denoise','denoise']])add(label,inputs[key]);
+            let model=link(inputs.model),layers=[],visited=new Set(),reliable=true;
+            while(model&&['LoraLoader','LoraLoaderModelOnly'].includes(model.class_type)){
+                if(visited.has(model)){reliable=false;break;}visited.add(model);
+                const i=model.inputs||{};
+                if(typeof i.strength_model!=='number'||(model.class_type==='LoraLoader'&&typeof i.strength_clip!=='number')){reliable=false;break;}
+                if(i.strength_model!==0 || (model.class_type==='LoraLoader'&&i.strength_clip!==0))layers.push([i.lora_name,`model ${i.strength_model}`+(model.class_type==='LoraLoader'?`, CLIP ${i.strength_clip}`:'')]);
+                model=link(i.model);
+            }
+            if(reliable&&model&&['UNETLoader','CheckpointLoaderSimple'].includes(model.class_type)){
+                add('Model',model.inputs?.unet_name||model.inputs?.ckpt_name);
+                for(const [name,strength] of layers)if(typeof name==='string')add('LoRA',`${name} (${strength})`);
+            }
+        }
+    }
+    if(!active){
+        for(const [label,keys] of [['Model',['model','Model','checkpoint']],['Seed',['seed','Seed']],['Steps',['steps','Steps']],['CFG',['cfg','CFG','cfgScale']],['Sampler',['sampler','Sampler']],['Scheduler',['scheduler']],['Denoise',['denoise']]])add(label,pick(...keys));
+    }
+    const width=Number(pick('width')),height=Number(pick('height'));
+    if(width>0&&height>0)add('Image dimensions',`${width} × ${height}`);
+    if(active){
+        const decode=Object.values(graph).find(n=>n?.class_type==='VAEDecode'&&Array.isArray(n.inputs?.samples)&&graph[String(n.inputs.samples[0])]===active);
+        const vae=decode&&graph[String(decode.inputs?.vae?.[0])];
+        if(vae?.class_type==='VAELoader')add('VAE',vae.inputs?.vae_name);
+    }
+    return result;
+}
+
+function abyssRenderGenerationMetadata(body,data){
+    body.replaceChildren();
+    const meta=data.metadata||{},info=abyssGenerationMetadata(meta);
+    const el=(tag,cls,text)=>{const node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=text;return node;};
+    const button=(label,action)=>{const b=el('button','media-meta-action',label);b.type='button';b.onclick=async event=>{event.stopPropagation();try{await action();}catch(error){await window.modelRadarAlert?.(error.message||'Action failed.',{title:'Metadata action'});}};return b;};
+    const copy=async text=>{
+        if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(text);window.showModelRadarToast?.('Copied.');return;}
+        const area=el('textarea',null,text);area.style.position='fixed';area.style.opacity='0';document.body.append(area);area.select();
+        try{if(!document.execCommand('copy'))throw new Error('Copy failed. Select the text and copy it manually.');}finally{area.remove();}
+    };
+    const download=(value,name)=>{const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)],{type:'application/json'}));const a=el('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+    const section=(title)=>{const d=el('details','media-meta-section');d.append(el('summary',null,title));body.append(d);return d;};
+    const row=(label,value)=>{const r=el('div','media-meta-row');r.append(el('span','media-meta-label',label),el('span','media-meta-value',value));body.append(r);};
+    for(const [label,value] of info.settings)row(label,value);
+    if(!info.settings.length&&!info.positive&&!info.negative)body.append(el('p','media-meta-note','No generation settings available.'));
+    for(const [title,value] of [['Positive prompt',info.positive],['Negative prompt',info.negative]]){
+        if(value===null)continue;
+        if(value===''){row('Negative conditioning','Zeroed (no negative text)');continue;}
+        const d=section(title);d.append(button('Copy',()=>copy(value)),el('pre','media-meta-prompt',value));
+    }
+    if(info.notice)body.append(el('p','media-meta-note',info.notice));
+    if(info.workflow){
+        const actions=el('div','media-meta-actions');
+        actions.append(button('Download workflow JSON',()=>download(info.workflow,'workflow.json')),button('Copy workflow',()=>copy(JSON.stringify(info.workflow,null,2))));body.append(actions);
+        const d=section('Full ComfyUI workflow');d.append(el('pre','media-meta-prompt',JSON.stringify(info.workflow,null,2)));
+    }
+    const headerControls=body.closest('.media-metadata-card')?.querySelector('.media-metadata-controls');
+    headerControls?.querySelector('.media-meta-image-download')?.remove();
+    const imageUrl=data.original_url||meta.original_url||data.url;
+    if(String(data.type||'image').toLowerCase()==='image'&&typeof imageUrl==='string'&&/^(https?:\/\/|\/(?!\/))/.test(imageUrl)){
+        const imageDownload=button('Download image',async()=>{
+            const response=await fetch(imageUrl);
+            if(!response.ok)throw new Error('Image download failed. Try saving the image from its source page.');
+            const blob=await response.blob();
+            if(!blob.type.startsWith('image/'))throw new Error('The source did not return an image.');
+            const ext=({'image/png':'png','image/jpeg':'jpg','image/webp':'webp','image/gif':'gif','image/avif':'avif'})[blob.type]||'img';
+            const url=URL.createObjectURL(blob),a=el('a');a.href=url;
+            a.download=(String(data.filename||'image').replace(/\.[^.]+$/,'').replace(/[<>:"/\\|?*\x00-\x1f]/g,'_')||'image')+'.'+ext;
+            document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        });
+        imageDownload.classList.add('media-meta-image-download');
+        const imageLabel=data.original_url||meta.original_url?'Download original image':'Download image';
+        imageDownload.title=imageLabel;imageDownload.setAttribute('aria-label',imageLabel);
+        if(headerControls)headerControls.prepend(imageDownload);
+    }
+    const raw=section('Technical details / raw metadata');
+    raw.append(button('Copy raw metadata',()=>copy(JSON.stringify(meta,null,2))),el('pre','media-meta-prompt',JSON.stringify(meta,null,2)));
+    const note=el('p','media-meta-note','Source metadata saved by AbyssBeacon; embedded image metadata is separate.');raw.append(note);
+    if(data.filename)raw.append(el('p','media-meta-note',`Filename: ${data.filename}`));
+    if(data.path)raw.append(el('p','media-meta-note',`Path: ${data.path}`));
+}
+
 function initializeGallery(detailRoot=null){
     const detail = detailRoot || document.querySelector(".model-detail");
     if(!detail) return;
@@ -277,8 +398,7 @@ function initializeGallery(detailRoot=null){
         if(filenameEl) filenameEl.textContent=data.filename||"";
         if(pathEl) pathEl.textContent=data.path&&data.path!==data.filename?data.path:"";
         if(!metadataBody) return;
-        const entries=metadataEntries(data); metadataBody.innerHTML="";
-        entries.forEach(([k,v],i)=>{const row=document.createElement("div");row.className="media-meta-row"+(i>=5?" media-meta-extra":"");const l=document.createElement("span");l.className="media-meta-label";l.textContent=k.replaceAll("_"," ");const val=document.createElement("span");val.className="media-meta-value";val.textContent=valueText(v);row.append(l,val);metadataBody.appendChild(row);});
+        abyssRenderGenerationMetadata(metadataBody,data);
         if(allowEnrich) enrichMetadataIfNeeded(index);
     }
 
@@ -447,7 +567,7 @@ function initializeGallery(detailRoot=null){
         mediaData.forEach((_,i)=>{
             if(!sourceMatchesIndex(i)) return;
             const identity=versionIdentity(i);
-            if((wantedId&&identity.id===wantedId)||(wantedName&&identity.name===wantedName)){
+            if(wantedId && identity.id ? identity.id === wantedId : wantedName && identity.name === wantedName){
                 matches.push(i);
             }
         });
@@ -470,7 +590,7 @@ function initializeGallery(detailRoot=null){
 
             if(index<0){
                 const incomingUrl=String(incoming.url||"");
-                index=mediaData.findIndex(item=>String(item?.url||"")===incomingUrl);
+                index=mediaData.findIndex((item,i)=>item.source===incoming.source && String(item?.url||"")===incomingUrl && versionIdentity(i).id===String(incoming.metadata?.civitai_model_version_id || incoming.metadata?.civitai_red_model_version_id || ""));
             }
 
             if(index>=0){
@@ -494,14 +614,15 @@ function initializeGallery(detailRoot=null){
         return indices;
     }
 
-    async function ensureVersionGallery(wantedName,wantedId){
+    async function ensureVersionGallery(wantedName,wantedId,source){
         const versionId=String(wantedId||"").trim();
         const modelId=String(detail.dataset.modelId||"").trim();
         if(!versionId||!modelId) return matchingVersionIndices(wantedName,wantedId);
 
-        if(versionMetadataRequests.has(versionId)){
+        const key=source + "/" + versionId;
+        if(versionMetadataRequests.has(key)){
             try{
-                await versionMetadataRequests.get(versionId);
+                await versionMetadataRequests.get(key);
             }catch(e){}
             return matchingVersionIndices(wantedName,wantedId);
         }
@@ -509,18 +630,19 @@ function initializeGallery(detailRoot=null){
         const request=(async()=>{
             try{
                 const response=await fetch(
+                    source==="civitai" ? `/api/model/${encodeURIComponent(modelId)}/civitai-version/${encodeURIComponent(versionId)}/gallery` :
                     `/api/model/${encodeURIComponent(modelId)}/version/${encodeURIComponent(versionId)}/media-metadata`
                 );
                 const payload=await response.json().catch(()=>({}));
                 if(response.ok&&Array.isArray(payload.media)){
                     mergeReturnedVersionMedia(payload.media);
-                }
+                }else versionMetadataRequests.delete(key);
             }catch(e){
-                // Keep the version selected even if Red is temporarily unavailable.
+                versionMetadataRequests.delete(key);
             }
         })();
 
-        versionMetadataRequests.set(versionId,request);
+        versionMetadataRequests.set(key,request);
         await request;
         return matchingVersionIndices(wantedName,wantedId);
     }
@@ -532,7 +654,7 @@ function initializeGallery(detailRoot=null){
 
         const source=activeSourceView!=="combined"
             ? activeSourceView
-            : String(detail.dataset.source||"").trim().toLowerCase();
+            : String(detail.querySelector(".model-version-pill.selected")?.dataset.versionSource || detail.dataset.source || "").trim().toLowerCase();
         let matches=matchingVersionIndices(wantedName,wantedId);
 
         // Only sources whose media rows actually carry version identity should
@@ -540,7 +662,8 @@ function initializeGallery(detailRoot=null){
         // resolve a missing historical-version gallery on demand; other
         // sources must keep their normal full gallery instead of falling into
         // the Red-specific "Loading this version's previews..." state.
-        if(!matches.length && source!=="civitaired"){
+        const versionProvider = source==="civitaired" || source==="civitai";
+        if(!matches.length && !versionProvider){
             visibleIndices=sourceVisibleIndices();
             total=visibleIndices.length;
             current=0;
@@ -575,9 +698,11 @@ function initializeGallery(detailRoot=null){
             setMetadataAvailable(false);
         }
 
-        if(!hydrate||!wantedId||source!=="civitaired") return;
+        if(!hydrate||!wantedId||!versionProvider||(source==="civitai"&&matches.length)) return;
+        const requestedView = activeSourceView;
 
-        matches=await ensureVersionGallery(wantedName,wantedId);
+        matches=await ensureVersionGallery(wantedName,wantedId,source);
+        if(requestedView!==activeSourceView || lifecycleSignal.aborted) return;
 
         // The user may have selected another pill while the request was in flight.
         const selected=detail.querySelector(".model-version-pill.selected[data-version-name]");
@@ -661,9 +786,20 @@ function initializeGallery(detailRoot=null){
         }, {signal:lifecycleSignal});
     }
 
-    function setMetadataVisibility(hidden){if(!metadataCard)return;metadataCard.classList.toggle("user-hidden",hidden);if(metadataRestore)metadataRestore.classList.toggle("visible",hidden);try{localStorage.setItem("modelradarMetadataHidden",hidden?"1":"0");}catch(e){}}
+    function setMetadataVisibility(hidden){
+        if(!metadataCard)return;
+        metadataCard.classList.toggle("user-hidden",hidden);
+        if(metadataRestore){
+            metadataRestore.classList.add("visible");
+            metadataRestore.textContent=hidden?"ⓘ":"×";
+            metadataRestore.title=hidden?"Show metadata":"Hide metadata";
+            metadataRestore.setAttribute("aria-label",metadataRestore.title);
+            metadataRestore.setAttribute("aria-expanded",String(!hidden));
+        }
+        try{localStorage.setItem("modelradarMetadataHidden",hidden?"1":"0");}catch(e){}
+    }
     if(metadataToggle&&metadataCard)metadataToggle.onclick=()=>{const collapsed=metadataCard.classList.toggle("collapsed");metadataToggle.textContent=collapsed?"More":"Less";};
-    if(metadataHide)metadataHide.onclick=()=>setMetadataVisibility(true); if(metadataRestore)metadataRestore.onclick=()=>setMetadataVisibility(false); try{setMetadataVisibility(localStorage.getItem("modelradarMetadataHidden")==="1");}catch(e){}
+    if(metadataHide)metadataHide.onclick=()=>setMetadataVisibility(true); if(metadataRestore)metadataRestore.onclick=()=>setMetadataVisibility(!metadataCard.classList.contains("user-hidden")); try{setMetadataVisibility(localStorage.getItem("modelradarMetadataHidden")==="1");}catch(e){}
 
     function setExpanded(expanded){
         if(!panel)return; panel.classList.toggle("viewer-expanded",expanded); detail.classList.toggle("viewer-expanded",expanded); if(expandBtn)expandBtn.textContent=expanded?"Restore Viewer":"Expand Viewer";

@@ -1,0 +1,24 @@
+.architecture-new{display:inline-block;vertical-align:middle;width:6px;height:6px;flex-shrink:0;border-radius:50%;margin-left:7px;background:var(--source-color,#00eaff);color:var(--source-color,#00eaff);animation:architectureNewPing 3.6s ease-in-out infinite;animation-delay:var(--new-pulse-delay,0ms)}
+@keyframes architectureNewPing{0%,65%,100%{opacity:.8;box-shadow:0 0 0 0 transparent}80%{opacity:1;box-shadow:0 0 5px 2px currentColor}}
+@media(prefers-reduced-motion:reduce){.architecture-new{animation:none}}
+.mark-seen-menu{position:relative;flex-shrink:0;color:#00eaff}
+.clear-new-pill{background:#080808;border:1px solid rgba(0,234,255,.35);color:#00eaff;border-radius:20px;padding:6px 12px;font:inherit;font-size:13px;font-weight:500;letter-spacing:.1px;text-transform:none;white-space:nowrap;cursor:pointer;transition:.2s ease}
+.clear-new-pill:hover{border-color:#00eaff;box-shadow:0 0 6px rgba(0,234,255,.18)}
+.clear-new-pill[hidden],.mark-seen-menu[hidden]{display:none!important}
+.mark-seen-menu>summary{list-style:none}.mark-seen-menu>summary::marker{content:""}.mark-seen-menu>summary::-webkit-details-marker{display:none}
+.mark-seen-actions{position:absolute;right:0;top:calc(100% + 6px);min-width:220px;display:grid;gap:6px;padding:10px;background:#080808;color:#ddd;border:1px solid rgba(0,234,255,.35);border-radius:8px;z-index:2000;box-shadow:0 0 20px rgba(0,234,255,.15)}
+.mark-seen-actions button{padding:8px 12px;text-align:left;color:#00eaff;background:#080808;border:1px solid rgba(0,234,255,.35);border-radius:20px;cursor:pointer;transition:.2s ease}
+.mark-seen-actions button:hover,.mark-seen-actions button:focus-visible{color:#00eaff;background:rgba(0,234,255,.12);border-color:#00eaff}
+.seen-dialog{color:#bbb;background:#090b0c;border:1px solid rgba(0,234,255,.38);border-radius:14px;padding:22px;max-width:min(560px,calc(100vw - 32px));max-height:85vh;overflow:auto;box-shadow:0 0 30px rgba(0,234,255,.16)}
+.seen-dialog::backdrop{background:rgba(0,0,0,.72);backdrop-filter:blur(5px)}
+.seen-dialog h3{color:#00eaff;margin-bottom:14px}.seen-dialog p{line-height:1.6;margin-bottom:20px;white-space:pre-line}
+.seen-dialog button{padding:8px 18px;color:#aaa;background:#080808;border:1px solid rgba(255,255,255,.15);border-radius:20px;cursor:pointer;transition:.2s ease}
+.seen-dialog #markSeenAccept{color:#00eaff;border-color:rgba(0,234,255,.4)}
+.seen-dialog button:hover{color:#00eaff;border-color:#00eaff;background:rgba(0,234,255,.08)}
+.clear-new-pill:focus-visible,.mark-seen-menu button:focus-visible,.seen-dialog button:focus-visible{outline:2px solid #00eaff;outline-offset:3px}
+#scanConfigOverlay .scan-seen-option{margin:14px 0 4px;padding:13px 14px;background:#080808;border:1px solid rgba(0,234,255,.2);border-radius:14px}
+#scanConfigOverlay .scan-clear-seen{display:grid;grid-template-columns:18px minmax(0,1fr);gap:12px;align-items:start;margin:0;color:#ccc;font-size:14px;line-height:1.5;cursor:pointer}
+#scanConfigOverlay #clearSeenBeforeScan{appearance:auto;width:18px;height:18px;min-width:18px;max-width:18px;margin:2px 0 0;padding:0;accent-color:#00eaff;justify-self:start}
+#scanConfigOverlay .scan-clear-seen>span{display:block;min-width:0}
+#scanConfigOverlay .pre-scan-seen-scope{display:block;padding-left:30px;margin-top:6px;line-height:1.5;color:#999;font-size:12px}
+#scanConfigOverlay .pre-scan-seen-scope[hidden]{display:none}

@@ -1,5 +1,21 @@
 <div id="optionsPanel" class="options-panel">
     <style>
+        .download-queue-options{margin-top:.75rem}
+        .download-queue-options > summary{display:list-item;list-style-position:inside;text-align:center;padding:.4rem .75rem;cursor:default;user-select:none}
+        .download-queue-options > summary:focus-visible{outline:2px solid currentColor;outline-offset:2px}
+        #localInstallDefaults{min-width:0;margin:0;border:0;padding:0}
+        #localInstallDefaults:disabled :is(select,input){opacity:.55}
+        #localDefaultsHint{margin-bottom:1rem}
+        .companion-files{min-width:0;margin:1rem 0 0;padding:.65rem .85rem;border:1px solid #294149;border-radius:.65rem}
+        .companion-files legend{padding:0 .35rem;font-weight:600}
+        .companion-choices{display:flex;flex-wrap:wrap;gap:.4rem 1.25rem}
+        .companion-choices label{display:inline-flex;align-items:center;gap:.4rem}
+        .companion-files .options-note{margin:.6rem 0 0}
+        .download-methods{border:0;padding:0;margin:0;min-width:0}
+        .download-methods label{margin-top:.5rem}
+        #autoCleanupSettings input:disabled{opacity:.6}
+        #downloadFolderSettings[hidden]{display:none}
+
         #automaticRetentionSettings.retention-link-highlight {
             outline: 1px solid #00d9ff;
             outline-offset: 4px;
@@ -16,6 +32,7 @@
             {% endif %}
             <button class="options-item{% if creator_page_mode or collection_page_mode %} active{% endif %}" data-page="scanner" type="button">Scanner</button>
             <button class="options-item" data-page="library" type="button">Library</button>
+            <button class="options-item" type="button" data-help-open>Help</button>
             <button id="closeOptionsReturn" class="options-item options-return-nav" type="button">← Return</button>
         </nav>
 
@@ -43,6 +60,9 @@
                                 <span>{{ source.display }}</span>
                             </label>
                             {% endfor %}
+                            {% if has_local_models %}
+                            <label class="option-toggle source-pill"><input type="checkbox" name="sources" value="local" data-source-label="Local" {% if preferences.get('show_local_source', true) %}checked{% endif %}><span>Local</span></label>
+                            {% endif %}
                         </div>
                     </details>
                 </div>
@@ -59,8 +79,7 @@
                 </div>
 
                 <label class="option-toggle"><input id="showMediaOnly" type="checkbox"><span>Models with media only</span></label>
-                <div class="options-note">Models stay New until you mark them as seen. Visible marks only models currently on screen; All marks every New model in your library.</div>
-                <div class="options-action-row"><button id="markVisibleSeen" class="options-secondary" type="button">Mark Visible as Seen</button><button id="markAllSeen" class="options-secondary" type="button">Mark All as Seen</button></div>
+                <div class="options-note">New is tracked separately for each architecture. Use Clear New beside Scan to clear selected architectures or the entire library, including unloaded cards.</div>
                 <button id="resetFilters" class="options-reset" type="button">Reset Filters</button>
             </div>
 
@@ -160,37 +179,58 @@
                         <span class="appearance-chevron" aria-hidden="true">▾</span>
                     </summary>
                     <div class="library-appearance-body">
-                        <label class="option-toggle-row"><input id="autoCleanupEnabled" type="checkbox" {% if preferences.get('auto_cleanup_enabled', False) %}checked{% endif %}><span><strong>Automatically clean old models</strong><small>Runs only after a completed normal scan. Favorites, favorite creators, and downloaded models are always protected.</small></span></label>
-                        <div id="autoCleanupSettings" {% if not preferences.get('auto_cleanup_enabled', False) %}hidden{% endif %}>
-                            <div class="library-cleanup-row"><label for="autoCleanupDays">Keep models for</label><div class="library-cleanup-input"><input id="autoCleanupDays" type="number" min="0" max="36500" value="{{ preferences.get('auto_cleanup_days', 7) }}"><span>days</span></div></div>
-                            <div class="options-note"><strong>Normal source scans use this same number of days.</strong> AbyssBeacon will not intentionally discover older models just to delete them during retention cleanup.</div>
-                            <div class="library-cleanup-row"><label for="creatorCleanupDays">Keep Creator / Discovery Scan models for</label><div class="library-cleanup-input"><input id="creatorCleanupDays" type="number" min="0" max="36500" value="{{ preferences.get('creator_cleanup_days', 30) }}"><span>days</span></div></div>
+                        <label class="option-toggle-row"><input id="autoCleanupEnabled" type="checkbox" {% if preferences.get('auto_cleanup_enabled', False) %}checked{% endif %}><span><strong>Automatically clean up old model cards</strong><small>Runs only after a completed normal scan. Favorites, favorite creators, and downloaded models are always protected.</small></span></label>
+                        <div id="autoCleanupSettings">
+                            <div class="library-cleanup-row"><label for="autoCleanupDays">Keep models for</label><div class="library-cleanup-input"><input id="autoCleanupDays" {% if not preferences.get('auto_cleanup_enabled', False) %}disabled{% endif %} type="number" min="0" max="36500" value="{{ preferences.get('auto_cleanup_days', 7) }}"><span>days</span></div></div>
+                            <div class="options-note">When retention is on, this window also limits how far back normal scans look.</div>
+                            <div class="library-cleanup-row"><label for="creatorCleanupDays">Keep Creator / Discovery Scan models for</label><div class="library-cleanup-input"><input id="creatorCleanupDays" {% if not preferences.get('auto_cleanup_enabled', False) %}disabled{% endif %} type="number" min="0" max="36500" value="{{ preferences.get('creator_cleanup_days', 30) }}"><span>days</span></div></div>
                             <div class="options-note">Creator and Discovery Scan models use the date they were first imported by AbyssBeacon and can have a longer retention window than normal discovery.</div>
                         </div>
                     </div>
                 </details>
                 <div class="options-divider"></div>
-                <details class="library-appearance-settings library-download-settings">
-                    <summary>
-                        <span><strong>Local Installer</strong><small>Send models directly into your ComfyUI library</small></span>
-                        <span class="appearance-chevron" aria-hidden="true">▾</span>
-                    </summary>
+                <details id="downloadMethodSettings" class="library-appearance-settings library-download-settings">
+                    <summary><span><strong>Downloads</strong><small>Choose how to save your models</small></span><span class="appearance-chevron" aria-hidden="true">▾</span></summary>
                     <div class="library-appearance-body">
-                        <div class="options-note">The card still has one Download action. AbyssBeacon follows the behavior selected here.</div>
-                        <div class="library-cleanup-row"><label for="downloadBehavior">Download behavior</label><select id="downloadBehavior" class="options-select"><option value="browser" {% if preferences.get('download_behavior','browser') == 'browser' %}selected{% endif %}>Browser download</option><option value="local" {% if preferences.get('download_behavior','browser') == 'local' %}selected{% endif %}>Install to local library</option></select></div>
-                        <div class="options-note"><strong>Why use the Local Installer?</strong> Downloads handled by AbyssBeacon get live Active Downloads progress, transfer speed, cancel/retry controls, automatic library placement, and optional preview/info sidecars. Browser downloads are handed off to your browser, so AbyssBeacon cannot display byte-level progress for them.</div>
-                        <div class="library-cleanup-row"><label for="queuedDownloadBehavior">When queued model becomes available</label><select id="queuedDownloadBehavior" class="options-select"><option value="ask" {% if preferences.get('queued_download_behavior','ask') == 'ask' %}selected{% endif %}>Ask before installing</option><option value="auto" {% if preferences.get('queued_download_behavior','ask') == 'auto' %}selected{% endif %}>Install automatically</option></select></div>
-                        <div class="options-note">Queued CivitAI/CivitAI Red releases are checked after every completed scan. AbyssBeacon verifies actual download availability, so popularity-based Early Access releases can trigger before their scheduled date.</div>
-                        <label class="options-field-label" for="localModelsRoot">ComfyUI folder</label>
+                        {% set local = preferences.get('download_behavior','browser') == 'local' %}
+                        <fieldset class="download-methods"><legend>Download method</legend>
+                        <label class="option-toggle-row"><input type="radio" name="download_method" value="local" {% if local %}checked{% endif %}><span><strong>Download with AbyssBeacon (recommended)</strong><small>Save models to your chosen folder and link them to your Downloaded library automatically. Track progress, cancel, or retry in Active Downloads.</small></span></label>
+                        <label class="option-toggle-row"><input type="radio" name="download_method" value="browser" {% if not local %}checked{% endif %}><span><strong>Download with your browser</strong><small>Your browser saves the file. To track it, choose Library maintenance → Add existing model files.</small></span></label>
+                        </fieldset>
+                        <div id="downloadFolderSettings" {% if not local %}hidden{% endif %}>{% set custom = preferences.get('install_destination') == 'custom' %}
+                        <label class="options-field-label" for="installDestination">Save downloads to</label>
+                        <select class="options-select" id="installDestination"><option value="comfy">ComfyUI folder</option><option value="custom" {% if custom %}selected{% endif %}>Custom model folder</option></select>
+                        <div id="customRootFields" {% if not custom %}hidden{% endif %}>
+                        <label class="options-field-label" for="customLibraryRoot">Custom model folder</label>
+                        <input id="customLibraryRoot" class="options-path-input" value="{{ preferences.get('custom_library_root','') }}" placeholder="B:\AI Models" spellcheck="false">
+                        <p class="options-note">AbyssBeacon creates category folders here, including checkpoints, loras, and workflows. Point your other apps at these folders to use the files.</p></div>
+                        <div id="comfyRootFields" {% if custom %}hidden{% endif %}><label class="options-field-label" for="localModelsRoot">ComfyUI folder</label>
                         <input id="localModelsRoot" class="options-path-input" type="text" value="{{ preferences.get('local_comfy_root', preferences.get('local_models_root','')) }}" placeholder="Example: C:\ComfyUI  or  …\…\ComfyUI" spellcheck="false">
-                        <div class="library-cleanup-row"><label for="installLayout">Folder layout</label><select id="installLayout" class="options-select"><option value="simple" {% if preferences.get('install_layout','simple') == 'simple' %}selected{% endif %}>Simple — AbyssBeacon / model</option><option value="organized" {% if preferences.get('install_layout','simple') == 'organized' %}selected{% endif %}>Organized — AbyssBeacon / source / model</option><option value="library" {% if preferences.get('install_layout','simple') == 'library' %}selected{% endif %}>Library — AbyssBeacon / architecture / source / model</option></select></div>
-                        <div class="library-cleanup-row"><label for="friendlyFilenames">Friendly filenames</label><select id="friendlyFilenames" class="options-select"><option value="off" {% if preferences.get('friendly_filenames','off') == 'off' %}selected{% endif %}>Keep original filenames</option><option value="obvious" {% if preferences.get('friendly_filenames','off') == 'obvious' %}selected{% endif %}>Rename obvious garbage only</option><option value="descriptive" {% if preferences.get('friendly_filenames','off') == 'descriptive' %}selected{% endif %}>Prefer descriptive filenames</option></select></div>
+                        <p class="options-note">Choose the ComfyUI folder that contains <code>models</code>.</p></div>
+                        <button id="browseComfyRoot" class="options-secondary" type="button">Browse…</button>
+                        <button id="testLocalModelsRoot" class="options-secondary" type="button">Test folder</button>
+                        <div id="localInstallerStatus" class="options-note" role="status"></div></div>
+                        <details class="download-queue-options"><summary>Queue options for CivitAI and CivitAI Red</summary><div class="library-cleanup-row"><label for="queuedDownloadBehavior">When queued model becomes available</label><select id="queuedDownloadBehavior" class="options-select"><option value="ask" {% if preferences.get('queued_download_behavior','ask') == 'ask' %}selected{% endif %}>Ask before installing</option><option value="auto" {% if preferences.get('queued_download_behavior','ask') == 'auto' %}selected{% endif %}>Install automatically</option></select></div>
+                        <div class="options-note">Queued CivitAI/CivitAI Red releases are checked after every completed scan. AbyssBeacon verifies actual download availability, so popularity-based Early Access releases can trigger before their scheduled date.</div>
+                        </details>
+                    </div></details>
+                <div class="options-divider"></div>
+                <details class="library-appearance-settings"><summary><span><strong>Local library settings</strong><small>Applies when AbyssBeacon saves your downloads</small></span><span class="appearance-chevron" aria-hidden="true">▾</span></summary><div class="library-appearance-body">
+                        <div id="localDefaultsHint" {% if local %}hidden{% endif %}><p class="options-note">Choose Download with AbyssBeacon to set the folder layout, manage older versions, and save model info and previews.</p><button type="button" class="options-secondary" id="openDownloadMethod">Open download settings</button></div>
+                        <fieldset id="localInstallDefaults" aria-label="Local install defaults" {% if not local %}disabled{% endif %}>
+                        {% set layouts = [('simple','Simple','AbyssBeacon'), ('organized','Organized','AbyssBeacon / CivitAI'), ('library','Library','AbyssBeacon / SDXL / CivitAI')] %}
+                        {% set selected_layout = preferences.get('install_layout','simple') %}
+                        <div class="library-cleanup-row"><label for="installLayout">Folder layout</label><select id="installLayout" class="options-select" aria-describedby="layoutExample">
+                        {% for value,label,path in layouts %}<option value="{{ value }}" data-example="models / loras / {{ path }} / Detail Tweaker LoRA" {% if selected_layout == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                        </select></div>
+                        <p class="options-note">Example folder<br><span id="layoutExample" aria-live="polite">{% for value,label,path in layouts if value == selected_layout %}models / loras / {{ path }} / Detail Tweaker LoRA{% endfor %}</span></p>
+                        <p class="options-note">Downloads keep the source filename.</p>
                         <div class="library-cleanup-row"><label for="existingFileBehavior">If older version of file exists</label><select id="existingFileBehavior" class="options-select"><option value="keep_both" {% if preferences.get('existing_file_behavior','keep_both') == 'keep_both' %}selected{% endif %}>Keep both</option><option value="skip" {% if preferences.get('existing_file_behavior','keep_both') == 'skip' %}selected{% endif %}>Skip</option><option value="replace" {% if preferences.get('existing_file_behavior','keep_both') == 'replace' %}selected{% endif %}>Replace</option></select></div>
-                        <label class="option-toggle-row"><input id="saveModelInfo" type="checkbox" {% if preferences.get('save_model_info', True) %}checked{% endif %}><span><strong>Default: save model info</strong><small>Enabled by default in each model's Downloads panel. Creates one shared AbyssBeacon Info.txt per model folder.</small></span></label>
-                        <label class="option-toggle-row"><input id="saveModelPreview" type="checkbox" {% if preferences.get('save_model_preview', True) %}checked{% endif %}><span><strong>Default: save preview image</strong><small>Enabled by default in each model's Downloads panel. Creates one shared preview per model folder.</small></span></label>
-                        <div class="options-note">Choose the main <strong>ComfyUI</strong> folder only. AbyssBeacon automatically routes model files into <code>models\…</code> and workflows into <code>user\default\workflows</code>.</div><button id="testLocalModelsRoot" class="options-secondary" type="button">Test ComfyUI Folder</button>
-                        <div id="localInstallerStatus" class="options-note"></div>
-                        <div class="options-note"><strong>Library example:</strong> ComfyUI / models / loras / AbyssBeacon / Krea 2 / CivitAI / Model Name /<br><strong>Workflow example:</strong> ComfyUI / user / default / workflows / AbyssBeacon / Krea 2 / Source / Workflow Name /</div>
+                        <fieldset class="companion-files"><legend>Save alongside the model</legend><div class="companion-choices">
+                            <label><input id="saveModelInfo" type="checkbox" {% if preferences.get('save_model_info', True) %}checked{% endif %}> Model info (.txt)</label>
+                            <label><input id="saveModelPreview" type="checkbox" {% if preferences.get('save_model_preview', True) %}checked{% endif %}> Preview image</label>
+                        </div><p class="options-note">Model info keeps the source link and version handy, along with the creator’s description and trigger words when available. The preview gives you a visual reference from the model page. You can change either choice for an individual download.</p>
+                        </fieldset></fieldset>
                     </div>
                 </details>
                 <div class="options-divider"></div>

@@ -505,6 +505,8 @@ def _file_record(file_data, version, model_id):
         size_bytes = 0
     return {
         "name": name,
+        "original_filename": name,
+        "source_primary": file_data.get("primary") if isinstance(file_data.get("primary"), bool) else None,
         "path": path,
         "primary": primary,
         "size": size_kb,

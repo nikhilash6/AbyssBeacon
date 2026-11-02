@@ -1079,7 +1079,8 @@ def _build(detail):
             "id": str(detail.get("file_id") or version_id), "file_id": str(detail.get("file_id") or ""),
             "model_ver_no": version_id, "name": f"{name} - {detail.get('version_name') or detail.get('ver') or 'model'}",
             "path": f"seaart:{version_id}", "primary": True, "sha": sha256,
-            "hashes": hashes, "format": "SafeTensor" if source_downloadable else "",
+            # SeaArt's download permission does not identify the file format.
+            "hashes": hashes, "format": "",
             "seaart_dynamic_download": session_can_download,
         })
     created = _iso_ms(version_info.get("create_at") or detail.get("create_at"))

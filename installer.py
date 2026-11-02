@@ -10,6 +10,8 @@ from urllib.parse import unquote, urlparse
 
 import requests
 
+from download_details import file_purpose
+
 
 WINDOWS_RESERVED = {
     "CON", "PRN", "AUX", "NUL",
@@ -78,6 +80,11 @@ def comfy_category_for_model(model, filename="", file_data=None):
     """
     model = model or {}
     file_data = file_data or {}
+
+    # Component evidence must precede a repository/card-level classification.
+    purpose, component_category = file_purpose(file_data)
+    if component_category:
+        return component_category
 
     file_type = (
         file_data.get("file_type")
@@ -177,7 +184,7 @@ def comfy_category_for_model(model, filename="", file_data=None):
 
 
 def original_filename(file_data, target_url=""):
-    for key in ("name", "path", "filename"):
+    for key in ("original_filename", "name", "path", "filename"):
         raw = str((file_data or {}).get(key) or "").strip()
         if raw:
             return raw.replace("\\", "/").rsplit("/", 1)[-1]
@@ -346,6 +353,19 @@ def resolve_comfy_root(configured_root):
     return root
 
 
+def configured_install_root(prefs):
+    if prefs.get("install_destination") == "custom":
+        raw = str(prefs.get("custom_library_root") or "").strip()
+        if not raw:
+            return None
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            raise ValueError("Choose a full path for the custom model folder.")
+        return path
+    raw = prefs.get("local_comfy_root") or prefs.get("local_models_root")
+    return resolve_comfy_root(raw) if raw else None
+
+
 def _unknown_category_directory(comfy_root, folder_name):
     comfy_root = resolve_comfy_root(comfy_root)
     parent = comfy_root.parent
@@ -375,8 +395,7 @@ def _namespace_install_path(base, namespace, layout, model_name, source_label, a
     return base / namespace / architecture / source_label / model_name
 
 def install_directory(comfy_root, model, source, prefs, filename="", file_data=None):
-    root = resolve_comfy_root(comfy_root)
-    category = comfy_category_for_model(model, filename, file_data)
+    category = prefs.get("_install_category") or comfy_category_for_model(model, filename, file_data)
     layout = str(prefs.get("install_layout") or "simple").lower()
     architecture = safe_component(
         download_architecture(model, file_data or {}),
@@ -391,7 +410,12 @@ def install_directory(comfy_root, model, source, prefs, filename="", file_data=N
         "Model",
     )
 
-    current_base = category_base_directory(root, category)
+    if prefs.get("_install_folder"):
+        return Path(prefs["_install_folder"])
+    if prefs.get("install_destination") == "custom":
+        current_base = Path(comfy_root) / category
+    else:
+        current_base = category_base_directory(comfy_root, category)
     return _namespace_install_path(
         current_base, APP_NAMESPACE, layout, model_name, source_label, architecture
     )
@@ -498,6 +522,10 @@ class DownloadResumeUnavailable(Exception):
     """Raised when a server refuses a Range resume; existing .part is preserved."""
 
 
+class DownloadInvalidPayload(RuntimeError):
+    """Raised for non-model content that must never be kept as a resumable file."""
+
+
 def _download_rejection_detail(response, request_headers=None):
     """Read a bounded error response; never report request credentials/URLs."""
     content_type = str(response.headers.get("Content-Type") or "").lower()
@@ -541,6 +569,8 @@ def _download_rejection_detail(response, request_headers=None):
             pass
     # Only report recognized HTML reasons, not arbitrary page content.
     for marker, reason in (
+        ("civitai login", "Download endpoint requested CivitAI sign-in."),
+        ("log in", "Download endpoint requested sign-in."),
         ("sign in", "Download endpoint requested sign-in."),
         ("unauthorized", "Download endpoint reported unauthorized access."),
         ("access denied", "Download endpoint reported access denied."),
@@ -549,6 +579,67 @@ def _download_rejection_detail(response, request_headers=None):
         if marker in lower:
             return reason
     return "No recognized error reason in the response (" + content_type.split(";")[0][:60] + ")."
+
+
+
+
+def _download_content_type_error(response, destination, request_headers=None):
+    """Reject an HTML sign-in/challenge page masquerading as a successful file.
+
+    Some CivitAI downloads redirect to a 200 OK login page. HTTP status and
+    Content-Length alone cannot distinguish that page from the model weights.
+    """
+    content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+    final_path = str(urlparse(str(response.url or "")).path or "").lower()
+    is_binary_model = Path(destination).suffix.lower() in {
+        ".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".gguf", ".onnx",
+    }
+    if "text/html" in content_type or "application/xhtml" in content_type:
+        detail = _download_rejection_detail(response, request_headers)
+        if ("login" in final_path or "signin" in final_path
+                or "sign-in" in final_path or "sign-in" in detail.lower()):
+            return "The download server returned a sign-in page instead of the model file. Connect or refresh the source account and retry."
+        return "The download server returned an HTML page instead of the requested file. The download was not saved as a model."
+    if is_binary_model and (content_type.startswith("text/") or "json" in content_type):
+        detail = _download_rejection_detail(response, request_headers)
+        return "The download server returned a text/API response instead of the model file. " + detail
+    # A redirect to an authentication path is suspicious even if the server
+    # incorrectly reports application/octet-stream.
+    if is_binary_model and any(x in final_path for x in ("/login", "/signin", "/sign-in")):
+        return "The download server redirected to a sign-in page. Connect or refresh the source account and retry."
+    return ""
+
+
+def _verify_downloaded_safetensors(path):
+    """Check structure using only the header, never loading model tensors.
+
+    The SafeTensors header contains each tensor's data offsets. Checking the
+    largest declared endpoint catches truncated downloads even without a
+    trustworthy HTTP Content-Length header.
+    """
+    size = path.stat().st_size
+    if size < 10:
+        raise RuntimeError("Downloaded .safetensors file is incomplete or invalid (too small).")
+    with path.open("rb") as handle:
+        header_length = int.from_bytes(handle.read(8), "little")
+        if not 2 <= header_length <= min(100_000_000, size - 8):
+            raise DownloadInvalidPayload("Downloaded .safetensors file has an invalid header; it may be a login/error page or truncated transfer.")
+        try:
+            metadata = json.loads(handle.read(header_length).decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise DownloadInvalidPayload("Downloaded .safetensors file has invalid metadata; it will not be installed.") from exc
+    if not isinstance(metadata, dict):
+        raise DownloadInvalidPayload("Downloaded .safetensors file has invalid tensor metadata.")
+    data_length = size - 8 - header_length
+    for name, tensor in metadata.items():
+        if name == "__metadata__":
+            continue
+        offsets = tensor.get("data_offsets") if isinstance(tensor, dict) else None
+        if (not isinstance(offsets, list) or len(offsets) != 2
+                or any(not isinstance(x, int) or isinstance(x, bool) for x in offsets)
+                or offsets[0] < 0 or offsets[1] < offsets[0]
+                or offsets[1] > data_length):
+            raise DownloadInvalidPayload("Downloaded .safetensors file is incomplete or has invalid tensor offsets.")
 
 
 def _download_stream(url, destination, referer="", extra_headers=None, progress_callback=None, resume_existing=True):
@@ -609,6 +700,10 @@ def _download_stream(url, destination, referer="", extra_headers=None, progress_
                 suffix = (" " + detail) if detail else ""
                 raise RuntimeError(f"{host} rejected the file request (HTTP {response.status_code}).{suffix}")
 
+            rejection = _download_content_type_error(response, destination, request_headers)
+            if rejection:
+                raise DownloadInvalidPayload(rejection)
+
             resumed = existing > 0 and response.status_code == 206
             if existing > 0 and not resumed:
                 # NEVER truncate a saved partial file just because a server
@@ -651,7 +746,25 @@ def _download_stream(url, destination, referer="", extra_headers=None, progress_
                         downloaded_bytes += len(chunk)
                         if callable(progress_callback):
                             progress_callback(stage="Downloading", downloaded_bytes=downloaded_bytes, total_bytes=total_bytes, part_path=str(temp))
+        # Content-Length may be absent for chunked responses, but when it is
+        # supplied a short transfer must never be marked as a completed model.
+        content_encoding = str(response.headers.get("Content-Encoding") or "").lower()
+        # requests.iter_content yields decoded bytes for compressed responses,
+        # so compare HTTP Content-Length only for identity-encoded transfers.
+        if total_bytes and not any(x in content_encoding for x in ("gzip", "deflate", "br", "zstd")) and downloaded_bytes != total_bytes:
+            raise RuntimeError(
+                "Download size mismatch: received "
+                f"{downloaded_bytes} of {total_bytes} bytes. Partial data was kept for retry."
+            )
+        if destination.suffix.lower() == ".safetensors":
+            _verify_downloaded_safetensors(temp)
         os.replace(temp, destination)
+    except DownloadInvalidPayload:
+        # A login/error page is not a resumable model download. Do not retain
+        # it as a .part file and tempt the user to resume invalid bytes.
+        try: temp.unlink(missing_ok=True)
+        except OSError: pass
+        raise
     except DownloadPaused:
         # Pause means keep every byte already written so Resume can use Range.
         raise
@@ -817,20 +930,9 @@ def _save_preview(model, folder, installed_filename, download_headers=None):
 
 
 def install_model_file(model, file_data, source, target_url, prefs, download_headers=None, progress_callback=None, resume_existing=True):
-    configured_root = str(
-        prefs.get("local_comfy_root")
-        or prefs.get("local_models_root")
-        or ""
-    ).strip()
-    if not configured_root:
-        raise ValueError(
-            "Local installer is enabled, but no ComfyUI folder is configured in "
-            "Settings → Library → Local Installer."
-        )
-
-    root = resolve_comfy_root(configured_root)
-    if not root.exists() or not root.is_dir():
-        raise ValueError(f"Configured ComfyUI folder does not exist: {root}")
+    root = configured_install_root(prefs)
+    if root is None or not root.is_dir():
+        raise ValueError("Choose an existing destination folder in Settings → Library → Downloads.")
 
     filename = friendly_filename(
         model,
@@ -879,6 +981,34 @@ def install_model_file(model, file_data, source, target_url, prefs, download_hea
             signed_url, destination, "https://civitai.red/", storage_headers,
             progress_callback=progress_callback, resume_existing=True,
         )
+
+    # A source can supply a display label rather than an actual filename. Only
+    # assign an extension after inspecting the completed file; never guess from
+    # the card type, and never overwrite a file already at the new path.
+    from file_format_detection import needs_extension
+    if needs_extension(destination.name):
+        from file_format_detection import detect_extension
+        extension = detect_extension(destination)
+        if extension:
+            candidate = destination.with_name(destination.name + extension)
+            counter = 2
+            while candidate.exists():
+                candidate = destination.with_name(f'{destination.name} ({counter}){extension}')
+                counter += 1
+            try:
+                # Linking first is atomic and cannot replace an existing file.
+                # If a filesystem doesn't support hardlinks, retain the original
+                # file instead of risking an overwrite or losing the download.
+                os.link(destination, candidate)
+                try:
+                    destination.unlink()
+                except OSError:
+                    candidate.unlink()
+                    raise
+                destination = candidate
+                filename = destination.name
+            except OSError as exc:
+                print(f'Could not add verified file extension; original file kept: {exc}')
 
     if callable(progress_callback):
         progress_callback(stage="Installing")

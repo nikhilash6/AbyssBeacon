@@ -1021,3 +1021,14 @@ OPTIONS SUB-PAGES
 .architecture-filter-panel .options-multi-actions { position:sticky; top:-9px; background:#090d11; z-index:1; padding-top:8px; }
 .architecture-filter-choices input { position:absolute; display:block; opacity:0; width:1px; height:1px; }
 #sourceSearchFilters[hidden] { display:none; }
+
+.navbar .navbar-download-links { display:inline-flex; align-items:center; gap:.28rem; white-space:nowrap; }
+.navbar .nav-downloads-label { color:#a3b5bc; font-size:.75rem; }
+.navbar .nav-library-link { text-decoration:none; }
+.navbar .navbar-download-links .download-history-button:focus-visible { outline:1px solid currentColor; outline-offset:2px; }
+
+.navbar .nav-downloads-label:not([aria-hidden]) { color:#00e7ff; }
+
+.navbar .nav-activity-summary { align-items:center; }
+.navbar .navbar-download-links .download-history-button { font-size:.75rem; }
+.navbar .summary-dot { font-size:12px; line-height:1; color:#444; }
